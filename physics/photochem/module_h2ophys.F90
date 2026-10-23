@@ -149,7 +149,8 @@ contains
   ! #########################################################################################
   ! Procedure (type-bound) for NRL stratospheric h2o photochemistry physics.
   ! #########################################################################################
-  subroutine run(this, dt, p, h2opltc, h2o, dqv_dt_prd, dqv_dt_qv)
+  subroutine run(this, dt, p, h2opltc, h2o, dqv_dt_prd, dqv_dt_qv, h2otag)
+
     class(ty_h2ophys), intent(in) :: this
     real(kind_phys),   intent(in) :: &
          dt        ! Model timestep (sec)
@@ -162,6 +163,9 @@ contains
     real(kind_phys), intent(inout), dimension(:, :), optional :: &
          dqv_dt_prd, & ! Net production/loss effect
          dqv_dt_qv     ! water vapor effect
+    real(kind_phys), intent(inout), dimension(:,:), optional :: &
+         h2otag    ! tagged h2o, updated in step with h2o
+    real(kind_phys) :: tg_sneg, tg_spos, tg_frac, tg_alpha
     
     integer :: nCol, nLev, iCol, iLev, iCf, kmax, kmin, k
     logical, dimension(size(p,1)) :: flg
@@ -227,6 +231,20 @@ contains
              h2oib(iCol)  = h2o(iCol,iLev)
              temp      = 1.0 / pltc(iCol,2)
              h2o(iCol,iLev)  = (h2oib(iCol) + (pltc(iCol,1)+pltc(iCol,3)*temp)*dt) / (1.0 + temp*dt)
+             if (present(h2otag)) then
+!  tag: in-column production is tagged in full (source-ratio hook);
+!  -q/tau loss via same denominator; q-independent sinks at tag
+!  fraction (tg_alpha hook)
+                tg_alpha = 1.0_kind_phys
+                tg_spos  = max(pltc(iCol,1) + pltc(iCol,3)*temp, 0.0_kind_phys)
+                tg_sneg  = min(pltc(iCol,1) + pltc(iCol,3)*temp, 0.0_kind_phys)
+                tg_frac  = 0.0_kind_phys
+                if (h2oib(iCol) > 0.0_kind_phys) &
+                   tg_frac = h2otag(iCol,iLev) / h2oib(iCol)
+                h2otag(iCol,iLev) = (h2otag(iCol,iLev)             &
+                   + (tg_spos + tg_alpha*tg_frac*tg_sneg)*dt)      &
+                   / (1.0 + temp*dt)
+             endif             
           endif
        enddo
 

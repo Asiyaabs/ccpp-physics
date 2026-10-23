@@ -101,6 +101,7 @@
      &     do_canopy, cplaqm, claie, cfch, cfrt, cclu, cpopu,           &
      &     ntqv,dtend,dtidx,index_of_temperature,index_of_x_wind,       &
      &     index_of_y_wind,index_of_process_pbl,gen_tend,ldiag3d,       &
+     &     nqvtag,nqvtagv, ntke_trc,                                              &
      &     ten_t, ten_u, ten_v,                                         &
      &     errmsg,errflg)
 
@@ -112,7 +113,7 @@
 !
 !----------------------------------------------------------------------
       integer, intent(in)  :: im, km, ntrac, ntcw, ntrw, ntiw,          &
-     &                        ntke, ntqv
+     &                        ntke, ntqv, nqvtag, nqvtagv, ntke_trc
       integer, intent(in)  :: sfc_rlm
       integer, intent(in)  :: tc_pbl
       integer, intent(in)  :: use_lpt
@@ -249,6 +250,9 @@
      &                     q_diff(im,0:km-1,ntrac-1)
       real(kind=kind_phys) rrkp, phkp
       real(kind=kind_phys) tsumn(im), tsump(im), rtnp(im)
+      real(kind=kind_phys) qv_save, delta_qv, frac_tag, tag_move
+      integer is_qvt, is_qlt, is_qrt
+      integer, save :: ndbgp = 0
       real(kind=kind_phys) sfcpbl(im), vez0fun(im)
 !
       logical  pblflg(im), sfcflg(im), flg(im)
@@ -424,6 +428,11 @@
 ! if ntrac > ntke, the code needs to be modified
 !
       ntrac1 = ntrac - 1
+     
+      if(nqvtagv.gt.0)print*,ntrac,ntrac1,nqvtagv
+      if (nqvtagv.gt.0) print*,'ENTRY',q1(1,1,1),q1(1,1,nqvtagv)
+
+      
       km1 = km - 1
       kmpbl = km / 2
       kmscu = km / 2
@@ -1219,20 +1228,40 @@
         enddo
       enddo
       enddo
-!>  - Call mfpbltq(), which is an EDMF parameterization (Siebesma et al.(2007) \cite Siebesma_2007)
+
+!      if (nqvtagv > 0) then
+!        do k = 1, kmpbl
+!          do i = 1, im
+!            if (pcnvflg(i)) then
+!              if (abs(qcko(i,k,ntcw)-qcko(i,k,nqvtagv+1)) > 1.e-12) then
+!                print *, 'DBG BEFORE MFPBLTQ', i, k
+!                print *, qcko(i,k,ntcw), qcko(i,k,nqvtagv+1)
+!                goto 9001
+!              endif
+!            endif
+!          enddo
+!        enddo
+!      endif
+
+      
+!     >  - Call mfpbltq(), which is an EDMF parameterization (Siebesma et al.(2007) \cite Siebesma_2007)
 !!    to take into account nonlocal transport by large eddies. For details of the mfpbltq subroutine, step into its documentation ::mfpbltq
-      call mfpbltq(im,im,km,kmpbl,ntcw,ntrac1,dt2,
+      call mfpbltq(im,im,km,kmpbl,ntcw,ntrac1,dt2, nqvtagv,
      &    pcnvflg,zl,zm,q1,t1,u1,v1,plyr,pix,thlx,thvx,
      &    gdx,hpbl,kpbl,vpert,buou,wush,tkemean,vez0fun,xmf,
      &    tcko,qcko,ucko,vcko,xlamue,bl_upfr)
-!>  - Call mfscuq(), which is a new mass-flux parameterization for
+
+ 
+      
+!     >  - Call mfscuq(), which is a new mass-flux parameterization for
 !!    stratocumulus-top-induced turbulence mixing. For details of the mfscuq subroutine, step into its documentation ::mfscuq
-      call mfscuq(im,im,km,kmscu,ntcw,ntrac1,dt2,
+      call mfscuq(im,im,km,kmscu,ntcw,ntrac1,dt2, nqvtagv,
      &    scuflg,zl,zm,q1,t1,u1,v1,plyr,pix,
      &    thlx,thvx,thlvx,gdx,thetae,
      &    krad,mrad,radmin,buod,wush,tkemean,vez0fun,xmfd,
-     &    tcdo,qcdo,ucdo,vcdo,xlamde,bl_dnfr)
+     &     tcdo,qcdo,ucdo,vcdo,xlamde,bl_dnfr)
 
+      
       if (tc_pbl == 1) then
 !>  - unify mass fluxes with Cu
         do i=1,im
@@ -2431,7 +2460,7 @@ c
          enddo
       enddo
       if(ldiag3d) then
-         idtend = dtidx(ntke+100,index_of_process_pbl)
+         idtend = dtidx(ntke_trc+100,index_of_process_pbl)
          if(idtend>0) then
             dtend(1:im,1:km,idtend) = dtend(1:im,1:km,idtend) +         &
      &        (f1(1:im,1:km)-q1(1:im,1:km,ntke))*rdt
@@ -2451,6 +2480,15 @@ c
           do i = 1, im
             f2(i,1+is) = q1(i,1,n)
           enddo
+        enddo
+      endif
+c
+c  give tagged water vapor the same surface moisture flux as qv
+c
+      if (nqvtagv > 0) then
+        is = (nqvtagv - 1) * km
+        do i = 1, im
+          f2(i,1+is) = q1(i,1,nqvtagv) + dtdz1(i) * evap(i)
         enddo
       endif
 c
@@ -2566,7 +2604,14 @@ c
 !> - Call tridin() to solve tridiagonal problem for heat and moisture
 c
       call tridin(im,km,ntrac1,al,ad,au,f1,f2,au,f1,f2)
-!
+!  DEBUG P1: right after tridin
+      if (nqvtagv > 0 .and. ndbgp < 4) then
+        do k = 1, 16
+          print '(a,2i4,2es14.6)', 'P1', ndbgp, k,
+     &      f2(1,k+(ntcw-1)*km), f2(1,k+nqvtagv*km)
+        enddo
+      endif
+!     
 ! Negative moisture is set to zero after borrowing it from
 !   positive values within the mass-flux transport layers
 !
@@ -2621,12 +2666,17 @@ c
           if((pcnvflg(i) .or. scuflg(i)) .and.
      &       (k >= kbx .and. k <= kmx)) then
             if(rtnp(i) < 0.) then
+              qv_save = f2(i,k)
               if(tsump(i) > abs(tsumn(i))) then
                 if(f2(i,k) < 0.) f2(i,k) = 0.
                 if(f2(i,k) > 0.) f2(i,k) = (1.+rtnp(i))*f2(i,k)
               else
                 if(f2(i,k) < 0.) f2(i,k) = (1.+rtnp(i))*f2(i,k)
                 if(f2(i,k) > 0.) f2(i,k) = 0.
+              endif
+              if (nqvtagv > 0 .and. qv_save /= 0.) then
+                is_qvt = (nqvtagv-1) * km
+                f2(i,k+is_qvt) = f2(i,k+is_qvt)*(f2(i,k)/qv_save)
               endif
             endif
           endif
@@ -2662,6 +2712,7 @@ c
       do k = 1,km
         do i = 1,im
           if(rtnp(i) < 0.) then
+            qv_save = f2(i,k)
             if(tsump(i) > abs(tsumn(i))) then
               if(f2(i,k) < 0.) f2(i,k) = 0.
               if(f2(i,k) > 0.) f2(i,k) = (1.+rtnp(i))*f2(i,k)
@@ -2669,10 +2720,22 @@ c
               if(f2(i,k) < 0.) f2(i,k) = (1.+rtnp(i))*f2(i,k)
               if(f2(i,k) > 0.) f2(i,k) = 0.
             endif
+            if (nqvtagv > 0 .and. qv_save /= 0.) then
+              is_qvt = (nqvtagv-1) * km
+              f2(i,k+is_qvt) = f2(i,k+is_qvt)*(f2(i,k)/qv_save)
+            endif
           endif
         enddo
       enddo
-!
+      
+!  DEBUG P2: after vapor passes, before D2
+      if (nqvtagv > 0 .and. ndbgp < 4) then
+        do k = 1, 16
+          print '(a,2i4,2es14.6)', 'P2', ndbgp, k,
+     &      f2(1,k+(ntcw-1)*km), f2(1,k+nqvtagv*km)
+        enddo
+      endif
+!     
 ! Negative hydrometeors & tracers are set to zero after
 !  borrowing them from positive values within the mass-flux
 !  transport layers
@@ -2697,7 +2760,8 @@ c
             endif
             if((pcnvflg(i) .or. scuflg(i)) .and.
      &         (k >= kbx .and. k <= kmx)) then
-              if(f2(i,k+is) < 0.) then
+                          if(f2(i,k+is) < 0.) then
+                qv_save = f2(i,k)
                 tem = f2(i,k) + f2(i,k+is)
                 if(tem >= 0.0) then
                   f2(i,k) = tem
@@ -2707,6 +2771,17 @@ c
                   f2(i,k+is) = tem
                   f1(i,k) = f1(i,k) + elocp * f2(i,k)
                   f2(i,k) = 0.
+                endif
+                if (nqvtagv > 0 .and. qv_save > 0.) then
+                  delta_qv = qv_save - f2(i,k)
+                  if (delta_qv > 0.) then
+                    frac_tag = delta_qv / qv_save
+                    is_qvt = (nqvtagv-1) * km
+                    is_qlt = nqvtagv * km
+                    tag_move = frac_tag * f2(i,k+is_qvt)
+                    f2(i,k+is_qvt) = f2(i,k+is_qvt) - tag_move
+                    f2(i,k+is_qlt) = f2(i,k+is_qlt) + tag_move
+                  endif
                 endif
               endif
             endif
@@ -2735,6 +2810,7 @@ c
             if((pcnvflg(i) .or. scuflg(i)) .and.
      &         (k >= kbx .and. k <= kmx)) then
               if(f2(i,k+is) < 0.) then
+                qv_save = f2(i,k)
                 tem = f2(i,k) + f2(i,k+is)
                 if(tem >= 0.0) then
                   f2(i,k) = tem
@@ -2745,12 +2821,31 @@ c
                   f1(i,k) = f1(i,k) + elocp * f2(i,k)
                   f2(i,k) = 0.
                 endif
-              endif
+                if (nqvtagv > 0 .and. qv_save > 0.) then
+                  delta_qv = qv_save - f2(i,k)
+                  if (delta_qv > 0.) then
+                    frac_tag = delta_qv / qv_save
+                    is_qvt = (nqvtagv-1) * km
+                    is_qrt = (nqvtagv+2) * km
+                    tag_move = frac_tag * f2(i,k+is_qvt)
+                    f2(i,k+is_qvt) = f2(i,k+is_qvt) - tag_move
+                    f2(i,k+is_qrt) = f2(i,k+is_qrt) + tag_move
+                  endif
+                endif
+              endif             
             endif
           enddo
         enddo
       endif
 !
+!  DEBUG P3: after D2/D3, before generic hydrometeor passes
+      if (nqvtagv > 0 .and. ndbgp < 4) then
+        do k = 1, 16
+          print '(a,2i4,2es14.6)', 'P3', ndbgp, k,
+     &      f2(1,k+(ntcw-1)*km), f2(1,k+nqvtagv*km)
+        enddo
+      endif
+      
       if(ntrac1 >= 2) then
         do n = 2, ntrac1
           is = (n-1) * km
@@ -2860,6 +2955,15 @@ c
 !
         enddo
       endif
+      
+!  DEBUG P5: ql vs ql_tag after generic hydrometeor passes
+      if (nqvtagv > 0 .and. ndbgp < 4) then
+        do k = 1, 16
+          print '(a,2i4,2es14.6)', 'P5', ndbgp, k,
+     &      f2(1,k+(ntcw-1)*km), f2(1,k+nqvtagv*km)
+        enddo
+      endif
+      if (nqvtagv > 0) ndbgp = ndbgp + 1      
 c
 !> - Recover the tendencies of heat and moisture
 c
@@ -2897,6 +3001,20 @@ c
             enddo
           enddo
         endif
+        if (nqvtagv > 0) then
+           do n = 0, 5
+              idtend = dtidx(100+nqvtag+n,index_of_process_pbl)
+              if(idtend>=1) then
+                 is = (nqvtagv+n-1) * km
+                 do k = 1,km
+                    do i = 1,im
+                       qtend = (f2(i,k+is)-q1(i,k,nqvtagv+n))*rdt
+                       dtend(i,k,idtend) = dtend(i,k,idtend)+qtend*delt
+                    enddo
+                 enddo
+              endif
+           enddo
+        endif
       endif
 !
       if(ntrac1 >= 2) then
@@ -2915,8 +3033,11 @@ c
             is = (n-1) * km
             idtend = dtidx(n+100,index_of_process_pbl)
             if(idtend>=1) then
-              if(n/=ntke) then
-                do k = 1, km
+!     if(n/=ntke) then
+
+              if(n/=ntke .and. .not.
+     &          (nqvtagv>0.and.n>=nqvtagv.and.n<=nqvtagv+5)) then
+                 do k = 1, km
                   do i = 1, im
                     qtend = (f2(i,k+is)-q1(i,k,n))*rdt
                     dtend(i,k,idtend) = dtend(i,k,idtend)+qtend*delt

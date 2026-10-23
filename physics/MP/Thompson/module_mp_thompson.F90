@@ -65,7 +65,7 @@ module module_mp_thompson
    use mpi_f08
 
    implicit none
-
+   real(wp), public :: tg_floor_frac = 0.0_wp   ! tagged fraction of vapor-floor water (set by mp_thompson_run)
    logical, parameter, private :: iiwarm = .false.
    logical, private :: is_aerosol_aware = .false.
    logical, private :: merra2_aerosol_aware = .false.
@@ -1000,7 +1000,8 @@ module module_mp_thompson
 !!This is a wrapper routine designed to transfer values from 3D to 1D.
 !!\section gen_mpgtdriver Thompson mp_gt_driver General Algorithm
 !> @{
-      subroutine mp_gt_driver(qv, qc, qr, qi, qs, qg, ni, nr, nc,     &
+      
+      subroutine mp_gt_driver(qtag, tgpcpv, qv, qc, qr, qi, qs, qg, ni, nr, nc,  &           
                               nwfa, nifa, nwfa2d, nifa2d,             &
                               tt, th, pii,                            &
                               p, w, dz, dt_in, dt_inner,              &
@@ -1054,6 +1055,10 @@ module module_mp_thompson
                               its,ite, jts,jte, kts,kte
          real(wp), dimension(ims:ime, kms:kme, jms:jme), intent(inout):: &
                            qv, qc, qr, qi, qs, qg, ni, nr
+         ! qv_tag MP tagging: tags (1=v,2=l,3=i,4=r,5=s,6=g), mixing ratio
+         real(wp), dimension(ims:ime, kms:kme, jms:jme, 6), optional, intent(inout):: qtag
+         ! qv_tag: tagged sfc precip on this call, mm like RAINNCV (1=rain, 2=snow+graupel+ice)
+         real(wp), dimension(ims:ime, jms:jme, 2), optional, intent(inout):: tgpcpv
          real(wp), dimension(ims:ime, kms:kme, jms:jme), optional, intent(inout):: &
                            tt, th
          real(wp), dimension(ims:ime, kms:kme, jms:jme), optional, intent(in):: &
@@ -1121,7 +1126,9 @@ module module_mp_thompson
                            qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,     &
                            nr1d, nc1d, nwfa1d, nifa1d,                   &
                            t1d, p1d, w1d, dz1d, rho, dBZ, pfil1, pfll1
-   !..Extended diagnostics, single column arrays
+         !..qv_tag MP tagging: local column tags (1=v,2=l,3=i,4=r,5=s,6=g)
+         real(wp), dimension(kts:kte,6) :: tg1d
+         !..Extended diagnostics, single column arrays
          real(wp), dimension(:), allocatable::                              &
                            !vtsk1, txri1, txrc1,                       &
                            prw_vcdc1,                                 &
@@ -1140,11 +1147,14 @@ module module_mp_thompson
 
          real(wp), dimension(kts:kte):: re_qc1d, re_qi1d, re_qs1d
 #if ( WRF_CHEM == 1 )
-      real(wp), dimension(kts:kte):: &
-                        rainprod1d, evapprod1d
+         real(wp), dimension(kts:kte):: &
+              rainprod1d, evapprod1d
 #endif
          real(wp), dimension(its:ite, jts:jte):: pcp_ra, pcp_sn, pcp_gr, pcp_ic
+         real(wp), dimension(its:ite, jts:jte, 2):: tg_pcp_acc   ! qv_tag: tagged sfc precip summed over inner steps (1=rain, 2=snow+graupel+ice)        
+         
          real(wp) :: dt, pptrain, pptsnow, pptgraul, pptice
+         real(wp) :: tg_ppt(4)   ! qv_tag: tagged sfc precip per column (1=rain,2=snow,3=graupel,4=ice)
          real(wp) :: qc_max, qr_max, qs_max, qi_max, qg_max, ni_max, nr_max
          integer:: lsml
          real(wp) :: rand1, rand2, rand3, rand_pert_max
@@ -1284,6 +1294,7 @@ module module_mp_thompson
          pcp_sn(:,:) = 0.0
          pcp_gr(:,:) = 0.0
          pcp_ic(:,:) = 0.0
+         tg_pcp_acc(:,:,:) = 0.0
          pfils(:,:,:) = 0.0
          pflls(:,:,:) = 0.0
          rand_pert_max = 0.0
@@ -1367,10 +1378,12 @@ module module_mp_thompson
                pptsnow = 0.
                pptgraul = 0.
                pptice = 0.
+               tg_ppt = 0.
+               
                RAINNCV(i,j) = 0.
                IF ( PRESENT (snowncv) ) THEN
                   SNOWNCV(i,j) = 0.
-               ENDIF
+               ENDIF               
                IF ( PRESENT (icencv) ) THEN
                   ICENCV(i,j) = 0.
                ENDIF
@@ -1394,6 +1407,11 @@ module module_mp_thompson
                   qr1d(k) = qr(i,k,j)
                   qs1d(k) = qs(i,k,j)
                   qg1d(k) = qg(i,k,j)
+                  if (present(qtag)) then
+                     tg1d(k,:) = qtag(i,k,j,:)
+                  else
+                     tg1d(k,:) = 0.
+                  endif
                   ni1d(k) = ni(i,k,j)
                   nr1d(k) = nr(i,k,j)
                   rho(k) = RoverRv*p1d(k) / (R*t1d(k)*(qv1d(k)+RoverRv))
@@ -1463,9 +1481,9 @@ module module_mp_thompson
                endif
 
 !> - Call mp_thompson()
-               call mp_thompson(qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,     &
-                           nr1d, nc1d, nwfa1d, nifa1d, t1d, p1d, w1d, dz1d,  &
-                           lsml, pptrain, pptsnow, pptgraul, pptice, &
+               call mp_thompson(tg1d, present(qtag), qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,     &
+                    nr1d, nc1d, nwfa1d, nifa1d, t1d, p1d, w1d, dz1d,  &
+                    lsml, pptrain, pptsnow, pptgraul, pptice, tg_ppt, &
 #if ( WRF_CHEM == 1 )
                      rainprod1d, evapprod1d, &
 #endif
@@ -1491,6 +1509,8 @@ module module_mp_thompson
                pcp_sn(i,j) = pcp_sn(i,j) + pptsnow
                pcp_gr(i,j) = pcp_gr(i,j) + pptgraul
                pcp_ic(i,j) = pcp_ic(i,j) + pptice
+               tg_pcp_acc(i,j,1) = tg_pcp_acc(i,j,1) + tg_ppt(1)
+               tg_pcp_acc(i,j,2) = tg_pcp_acc(i,j,2) + tg_ppt(2) + tg_ppt(3) + tg_ppt(4)
                RAINNCV(i,j) = pptrain + pptsnow + pptgraul + pptice
                RAINNC(i,j) = RAINNC(i,j) + pptrain + pptsnow + pptgraul + pptice
                IF ( PRESENT(snowncv) .AND. PRESENT(snownc) ) THEN
@@ -1513,6 +1533,10 @@ module module_mp_thompson
                   GRAUPELNC(i,j) = GRAUPELNC(i,j) + pptgraul
                ENDIF
                SR(i,j) = (pptsnow + pptgraul + pptice) / (RAINNCV(i,j)+R1)
+               if (present(tgpcpv)) then
+                  tgpcpv(i,j,1) = tg_ppt(1)
+                  tgpcpv(i,j,2) = tg_ppt(2) + tg_ppt(3) + tg_ppt(4)
+               endif               
 
 !..Reset lowest model level to initial state aerosols (fake sfc source).
 !.. Changed 13 May 2013 to fake emissions in which nwfa2d is aerosol
@@ -1550,6 +1574,7 @@ module module_mp_thompson
                   qr(i,k,j) = qr1d(k)
                   qs(i,k,j) = qs1d(k)
                   qg(i,k,j) = qg1d(k)
+                  if (present(qtag)) qtag(i,k,j,:) = tg1d(k,:)
                   ni(i,k,j) = ni1d(k)
                   nr(i,k,j) = nr1d(k)
                   pfils(i,k,j) = pfils(i,k,j) + pfil1(k)
@@ -1686,6 +1711,10 @@ module module_mp_thompson
                if (ndt>1 .and. it==ndt) then
                   SR(i,j) = (pcp_sn(i,j) + pcp_gr(i,j) + pcp_ic(i,j)) / (RAINNC(i,j)+R1)
                   RAINNCV(i,j) = RAINNC(i,j)
+                  if (present(tgpcpv)) then
+                     tgpcpv(i,j,1) = tg_pcp_acc(i,j,1)
+                     tgpcpv(i,j,2) = tg_pcp_acc(i,j,2)
+                  endif
                   IF ( PRESENT (snowncv) ) THEN
                      SNOWNCV(i,j) = SNOWNC(i,j)
                   ENDIF
@@ -1880,10 +1909,10 @@ module module_mp_thompson
 !! those pieces remain.  A complete description is now found in
 !! Thompson et al. (2004, 2008)\cite Thompson_2004 \cite Thompson_2008.
 !>\section gen_mp_thompson  mp_thompson General Algorithm
-!> @{
-   subroutine mp_thompson (qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,     &
+   !> @{
+   subroutine mp_thompson (tg1d, ltag, qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,   &
                         nr1d, nc1d, nwfa1d, nifa1d, t1d, p1d, w1d, dzq,  &
-                        lsml, pptrain, pptsnow, pptgraul, pptice,        &
+                        lsml, pptrain, pptsnow, pptgraul, pptice, tg_ppt, &
 #if ( WRF_CHEM == 1 )
                         rainprod, evapprod,                              &
 #endif
@@ -1918,8 +1947,12 @@ module module_mp_thompson
                           qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d, &
                           nr1d, nc1d, nwfa1d, nifa1d, t1d
       real(wp), dimension(kts:kte), intent(out) :: pfil1, pfll1
+      ! qv_tag MP tagging: tags (1=v,2=l,3=i,4=r,5=s,6=g), mixing ratio
+      real(wp), dimension(kts:kte,6), intent(inout) :: tg1d
+      logical, intent(in) :: ltag
       real(wp), dimension(kts:kte), intent(in) :: p1d, w1d, dzq
       real(wp), intent(inout) :: pptrain, pptsnow, pptgraul, pptice
+      real(wp), dimension(4), intent(inout) :: tg_ppt   ! qv_tag: tagged sfc precip (1=rain,2=snow,3=graupel,4=ice)
       real(wp), intent(in) :: dt
       integer, intent(in) :: lsml
       real(wp), intent(in) :: rand1, rand2, rand3
@@ -1955,7 +1988,25 @@ module module_mp_thompson
            qrten, qsten, qgten, niten, nrten, ncten, nwfaten, nifaten
 
       real(dp), dimension(kts:kte) :: prw_vcd
+      ! qv_tag MP tagging locals (1=v,2=l,3=i,4=r,5=s,6=g)
+      real(wp), dimension(kts:kte,6) :: tg_ten
+      real(wp), dimension(6) :: tg_f, tg_d
+      real(wp), dimension(21) :: tg_p
+      real(wp), dimension(3) :: tg_gt
+      real(wp) :: tg_x, tg_m, tg_s
+      integer, dimension(3) :: tg_gs
+      integer :: tg_n, tg_j
+      integer, parameter :: tg_a(21) = (/1,1,1,1,1,1,2,2,2,2,2,2,3,3,4,4,5,6,5,6,4/)
+      integer, parameter :: tg_b(21) = (/3,3,3,5,5,6,4,4,3,5,6,6,5,5,3,6,4,4,3,3,6/)
+      integer, save :: tg_ncall = 0   ! DEBUG DBGM1
+      real(wp), dimension(kts:kte)   :: tg_rs   ! tag density for sedimentation
+      real(wp), dimension(kts:kte+1) :: tg_sd   ! tag flux / scratch
 
+      real(wp), dimension(kts:kte)   :: tg_rr   ! copy of real ri/rs in sedimentation
+      real(wp), dimension(kts:kte+1) :: tg_rq   ! copy of real sedimentation flux
+      real(wp) :: tg_fv, tg_fk, tg_o
+      real(wp) :: tg_psfc   ! qv_tag: tagged sfc precip from semi_lagrange_sedim (precipt)
+      
       real(dp), dimension(kts:kte) :: pnc_wcd, pnc_wau, pnc_rcw, &
            pnc_scw, pnc_gcw
 
@@ -2076,6 +2127,7 @@ module module_mp_thompson
          qrten(k) = 0.
          qsten(k) = 0.
          qgten(k) = 0.
+         tg_ten(k,:) = 0.
          niten(k) = 0.
          nrten(k) = 0.
          ncten(k) = 0.
@@ -2265,6 +2317,7 @@ module module_mp_thompson
             endif
          else
             qc1d(k) = 0.0
+            tg1d(k,2) = 0.
             nc1d(k) = 0.0
             rc(k) = R1
             nc(k) = 2.
@@ -2292,6 +2345,7 @@ module module_mp_thompson
             endif
          else
             qi1d(k) = 0.0
+            tg1d(k,3) = 0.
             ni1d(k) = 0.0
             ri(k) = R1
             ni(k) = R2
@@ -2321,6 +2375,7 @@ module module_mp_thompson
             endif
          else
             qr1d(k) = 0.0
+            tg1d(k,4) = 0.
             nr1d(k) = 0.0
             rr(k) = R1
             nr(k) = R2
@@ -2332,6 +2387,7 @@ module module_mp_thompson
             L_qs(k) = .true.
          else
             qs1d(k) = 0.0
+            tg1d(k,5) = 0.
             rs(k) = R1
             L_qs(k) = .false.
          endif
@@ -2341,6 +2397,7 @@ module module_mp_thompson
             L_qg(k) = .true.
          else
             qg1d(k) = 0.0
+            tg1d(k,6) = 0.
             rg(k) = R1
             L_qg(k) = .false.
          endif
@@ -3353,6 +3410,95 @@ module module_mp_thompson
                       - prr_gml(k)) &
                       * orho
 
+
+!>  - qv_tag MP tagging: every rate moves tag at the source's tag fraction
+         if (ltag) then
+            tg_f = 0.
+            if (qv1d(k) .gt. 0.) tg_f(1) = tg1d(k,1)/qv1d(k)
+            tg_f(2:6) = tg_f(1)   ! empty/phantom sources carry the local vapor fraction
+            if (qc1d(k) .gt. R1) tg_f(2) = tg1d(k,2)/qc1d(k)
+            if (qi1d(k) .gt. R1) tg_f(3) = tg1d(k,3)/qi1d(k)
+            if (qr1d(k) .gt. R1) tg_f(4) = tg1d(k,4)/qr1d(k)
+            if (qs1d(k) .gt. R1) tg_f(5) = tg1d(k,5)/qs1d(k)
+            if (qg1d(k) .gt. R1) tg_f(6) = tg1d(k,6)/qg1d(k)
+            tg_d = 0.
+            ! two-body: tg_p > 0 moves tg_a -> tg_b, tg_p < 0 moves tg_b -> tg_a
+            tg_p(1)  = pri_inu(k)
+            tg_p(2)  = pri_iha(k)
+            tg_p(3)  = pri_ide(k)
+            tg_p(4)  = prs_ide(k)
+            tg_p(5)  = prs_sde(k)
+            tg_p(6)  = prg_gde(k)
+            tg_p(7)  = prr_wau(k)
+            tg_p(8)  = prr_rcw(k)
+            tg_p(9)  = pri_wfz(k)
+            tg_p(10) = prs_scw(k)
+            tg_p(11) = prg_scw(k)
+            tg_p(12) = prg_gcw(k)
+            tg_p(13) = prs_iau(k)
+            tg_p(14) = prs_sci(k)
+            tg_p(15) = pri_rfz(k)
+            tg_p(16) = prg_rfz(k)
+            tg_p(17) = prr_sml(k)
+            tg_p(18) = prr_gml(k)
+            tg_p(19) = prs_ihm(k)
+            tg_p(20) = prg_ihm(k)
+            tg_p(21) = prg_rcg(k)
+            do tg_n = 1, 21
+               if (tg_p(tg_n) .gt. 0.) then
+                  tg_x = tg_p(tg_n)*tg_f(tg_a(tg_n))
+               else
+                  tg_x = tg_p(tg_n)*tg_f(tg_b(tg_n))
+               endif
+               tg_d(tg_a(tg_n)) = tg_d(tg_a(tg_n)) - tg_x
+               tg_d(tg_b(tg_n)) = tg_d(tg_b(tg_n)) + tg_x
+            enddo
+            ! three-way collisions (not mass-balanced in real): sources lose own
+            ! fraction, gainers get their real gain x mass-weighted source fraction
+            do tg_j = 1, 2
+               if (tg_j .eq. 1) then
+                  tg_gs = (/3, 4, 6/)
+                  tg_gt(1) = -pri_rci(k)
+                  tg_gt(2) = -prr_rci(k)
+                  tg_gt(3) =  prg_rci(k)
+               else
+                  tg_gs = (/4, 5, 6/)
+                  tg_gt(1) = prr_rcs(k)
+                  tg_gt(2) = prs_rcs(k)
+                  tg_gt(3) = prg_rcs(k)
+               endif
+               tg_m = 0.
+               tg_s = 0.
+               do tg_n = 1, 3
+                  if (tg_gt(tg_n) .lt. 0.) then
+                     tg_m = tg_m - tg_gt(tg_n)
+                     tg_s = tg_s - tg_gt(tg_n)*tg_f(tg_gs(tg_n))
+                     tg_d(tg_gs(tg_n)) = tg_d(tg_gs(tg_n))                   &
+                                       + tg_gt(tg_n)*tg_f(tg_gs(tg_n))
+                  endif
+               enddo
+               if (tg_m .gt. 0.) then
+                  do tg_n = 1, 3
+                     if (tg_gt(tg_n) .gt. 0.) tg_d(tg_gs(tg_n)) =            &
+                          tg_d(tg_gs(tg_n)) + tg_gt(tg_n)*tg_s/tg_m
+                  enddo
+               endif
+            enddo
+            tg_ten(k,:) = tg_ten(k,:) + tg_d*orho
+            ! mirror the rain override (qrten = -qr1d*odts when xrr <= R1)
+            if (.not. (xrr .gt. R1)) tg_ten(k,4) = -tg1d(k,4)*odts
+            ! DEBUG DBGM1: in mode 2 tag and real rate tendencies must match here
+            if (k .eq. kts) tg_ncall = tg_ncall + 1
+            tg_x = abs(tg_ten(k,1)-qvten(k)) + abs(tg_ten(k,2)-qcten(k))      &
+                 + abs(tg_ten(k,3)-qiten(k)) + abs(tg_ten(k,4)-qrten(k))      &
+                 + abs(tg_ten(k,5)-qsten(k)) + abs(tg_ten(k,6)-qgten(k))
+            if (tg_x .gt. 1.e-14) print '(a,2i5,10es11.3)', 'DBGM1', tg_ncall, &
+                 k, tg_x, tg_ten(k,1)-qvten(k), tg_ten(k,2)-qcten(k),         &
+                 tg_ten(k,3)-qiten(k), tg_ten(k,4)-qrten(k),                  &
+                 tg_ten(k,5)-qsten(k), tg_ten(k,6)-qgten(k),                  &
+                 tg_f(1)-1., tg_f(3)-1., tg_f(5)-1. 
+         endif
+         
 !>  - Temperature tendency
          if (temp(k).lt.T_0) then
             tten(k) = tten(k) &
@@ -3469,6 +3615,7 @@ module module_mp_thompson
             L_qg(k) = .false.
          endif
       enddo
+      if (ltag) call tg_dbg_stage(1)
 
 !+---+-----------------------------------------------------------------+
 !> - With tendency-updated mixing ratios, recalculate snow moments and
@@ -3641,6 +3788,24 @@ module module_mp_thompson
 
             qvten(k) = qvten(k) - prw_vcd(k)
             qcten(k) = qcten(k) + prw_vcd(k)
+            ! qv_tag MP tagging: cloud condensation/evaporation, provisional source fraction
+            if (ltag) then
+               tg_x = prw_vcd(k)
+               tg_s = 0.
+               if (tg_x .gt. 0.) then
+                  tg_m = qv1d(k) + (qvten(k) + tg_x)*DT
+                  if (tg_m .gt. 0.) tg_s = (tg1d(k,1) + tg_ten(k,1)*DT)/tg_m
+               else
+                  tg_m = qc1d(k) + (qcten(k) - tg_x)*DT
+                  if (tg_m .gt. 0.) then
+                     tg_s = (tg1d(k,2) + tg_ten(k,2)*DT)/tg_m
+                  elseif (qv1d(k) .gt. 0.) then
+                     tg_s = tg1d(k,1)/qv1d(k)
+                  endif
+               endif
+               tg_ten(k,1) = tg_ten(k,1) - tg_x*tg_s
+               tg_ten(k,2) = tg_ten(k,2) + tg_x*tg_s
+            endif
             ncten(k) = ncten(k) + pnc_wcd(k)
             if (is_aerosol_aware)                                            &   
                nwfaten(k) = nwfaten(k) - pnc_wcd(k)
@@ -3662,6 +3827,7 @@ module module_mp_thompson
             ssatw(k) = qv(k)/qvs(k) - 1.
          endif
       enddo
+      if (ltag) call tg_dbg_stage(2)
 
 !+---+-----------------------------------------------------------------+
 !> - If still subsaturated, allow rain to evaporate, following
@@ -3731,6 +3897,22 @@ module module_mp_thompson
 
             qrten(k) = qrten(k) - prv_rev(k)
             qvten(k) = qvten(k) + prv_rev(k)
+            ! qv_tag MP tagging: rain evaporation, provisional rain fraction
+            if (ltag) then
+               tg_s = 0.
+               tg_m = qr1d(k) + (qrten(k) + prv_rev(k))*DT
+               if (tg_m .gt. 0.) then
+                  tg_s = (tg1d(k,4) + tg_ten(k,4)*DT)/tg_m
+               elseif (qv1d(k) .gt. 0.) then
+                  tg_s = tg1d(k,1)/qv1d(k)
+               endif
+               tg_ten(k,4) = tg_ten(k,4) - prv_rev(k)*tg_s
+               tg_ten(k,1) = tg_ten(k,1) + prv_rev(k)*tg_s
+            endif
+            ! DEBUG DBGR1: rain tag vs real after rain evaporation (mode 2)
+            if (ltag .and. abs(tg_ten(k,4)-qrten(k))*DT .gt. 1.e-14)          &
+               print '(a,2i5,3es12.4)', 'DBGR1', tg_ncall, k, qrten(k)*DT,     &
+                     tg_ten(k,4)*DT, (tg_ten(k,4)-qrten(k))*DT
             nrten(k) = nrten(k) - pnr_rev(k)
             if (is_aerosol_aware)                                            &
                nwfaten(k) = nwfaten(k) + pnr_rev(k)
@@ -3743,6 +3925,7 @@ module module_mp_thompson
             rho(k) = RoverRv*pres(k) / (R*temp(k)*(qv(k)+RoverRv))
          endif
       enddo
+      if (ltag) call tg_dbg_stage(3)
 #if ( WRF_CHEM == 1 )
       do k = kts, kte
          evapprod(k) = prv_rev(k) - (min(zeroD0,prs_sde(k)) + &
@@ -3813,7 +3996,7 @@ module module_mp_thompson
       endif
 
 !+---+-----------------------------------------------------------------+
-
+      
       if (ANY(L_qc .eqv. .true.)) then
          hgt_agl = 0.
          do_loop_hgt_agl : do k = kts, kte-1
@@ -4003,16 +4186,32 @@ module module_mp_thompson
             dtcfl = dt/niter
             do n = 1, niter
                rr_tmp(:) = rr(:)
+               ! qv_tag MP tagging: rain tag sediments with the real geometry
+               if (n .eq. 1) then
+                  do k = kts, kte
+                     tg_x = qr1d(k) + DT*qrten(k)
+                     if (rr(k) .ne. R1) then
+                        tg_fk = max(0., tg1d(k,4) + DT*tg_ten(k,4))/tg_x
+                     else
+                        tg_fk = 0.
+                        if (qv1d(k) .gt. 0.) tg_fk = tg1d(k,1)/qv1d(k)
+                     endif
+                     tg_rs(k) = rr(k)*tg_fk
+                  enddo
+               endif
+               tg_sd(kts:kte) = tg_rs(kts:kte)
                nr_tmp(:) = nr(:)
-               call semi_lagrange_sedim(kte,dzq,vtrk,rr,rainsfc,pfll,dtcfl,R1)
+               call semi_lagrange_sedim(kte,dzq,vtrk,rr,rainsfc,pfll,dtcfl,R1,rqt=tg_rs,precipt=tg_psfc)               
                call semi_lagrange_sedim(kte,dzq,vtnrk,nr,vtr,pdummy,dtcfl,R2)
                do k = kts, kte
                   orhodt = 1./(rho(k)*dt)
                   qrten(k) = qrten(k) + (rr(k) - rr_tmp(k)) * orhodt
+                  tg_ten(k,4) = tg_ten(k,4) + (tg_rs(k) - tg_sd(k))*orhodt
                   nrten(k) = nrten(k) + (nr(k) - nr_tmp(k)) * orhodt
                   pfll1(k) = pfll1(k) + pfll(k)
                enddo
                pptrain = pptrain + rainsfc
+               tg_ppt(1) = tg_ppt(1) + tg_psfc
 
                do k = kte+1, kts, -1
                   vtrk(k) = 0.
@@ -4040,8 +4239,33 @@ module module_mp_thompson
       endif
 
 !+---+-----------------------------------------------------------------+
-
+      ! DEBUG DBGR2: rain tag vs real after rain sedimentation (mode 2)
+      if (ltag) then
+         do k = kts, kte
+            if (abs(tg_ten(k,4)-qrten(k))*DT .gt. 1.e-14)                    &
+               print '(a,2i5,3es12.4)', 'DBGR2', tg_ncall, k, qrten(k)*DT,     &
+                     tg_ten(k,4)*DT, (tg_ten(k,4)-qrten(k))*DT
+         enddo
+      endif
+      if (ltag) call tg_dbg_stage(4)
+      
       if (ANY(L_qc .eqv. .true.)) then
+         ! qv_tag MP tagging: cloud tag sediments with the real fall speed
+         do k = kts, kte
+            tg_x = qc1d(k) + DT*qcten(k)
+            if (rc(k) .ne. R1) then
+               tg_fk = max(0., tg1d(k,2) + DT*tg_ten(k,2))/tg_x
+            else
+               tg_fk = 0.
+               if (qv1d(k) .gt. 0.) tg_fk = tg1d(k,1)/qv1d(k)
+            endif
+            tg_rs(k) = rc(k)*tg_fk
+            tg_sd(k) = vtck(k)*tg_rs(k)
+         enddo
+         tg_sd(kte+1) = 0.
+         do k = ksed1(5), kts, -1
+            tg_ten(k,2) = tg_ten(k,2) + (tg_sd(k+1)-tg_sd(k))/(dzq(k)*rho(k))
+         enddo
          do k = kte, kts, -1
             sed_c(k) = vtck(k)*rc(k)
             sed_n(k) = vtnck(k)*nc(k)
@@ -4055,11 +4279,60 @@ module module_mp_thompson
             nc(k) = max(10., nc(k) + (sed_n(k+1)-sed_n(k)) *odzq*DT)
          enddo
       endif
+      if (ltag) call tg_dbg_stage(5)
 
 !+---+-----------------------------------------------------------------+
 
       if (ANY(L_qi .eqv. .true.)) then
          nstep = nint(1./onstep(2))
+         ! qv_tag MP tagging: ice tag sediments exactly as real ice. A copy of
+         ! real ri (tg_rr) runs the same substeps and R1 floors; tag flux = vt x
+         ! tag density; water created by a floor gets the local tag fraction
+         ! (vapor tag fraction where the level had no ice)
+         do k = kts, kte
+            tg_fv = 0.
+            if (qv1d(k) .gt. 0.) tg_fv = tg1d(k,1)/qv1d(k)
+            tg_x = qi1d(k) + qiten(k)*DT
+            if (ri(k) .ne. R1) then
+               tg_fk = max(0., tg1d(k,3) + tg_ten(k,3)*DT)/tg_x
+            else
+               tg_fk = tg_fv
+            endif
+            tg_rr(k) = ri(k)
+            tg_rs(k) = ri(k)*tg_fk
+         enddo
+         do n = 1, nstep
+            do k = kte, kts, -1
+               tg_sd(k) = vtik(k)*tg_rs(k)
+               tg_rq(k) = vtik(k)*tg_rr(k)
+            enddo
+            k = kte
+            tg_o = 1./dzq(k)
+            tg_ten(k,3) = tg_ten(k,3) - tg_sd(k)*tg_o*onstep(2)*(1./rho(k))
+            tg_x = tg_rr(k) - tg_rq(k)*tg_o*DT*onstep(2)
+            tg_m = tg_rs(k) - tg_sd(k)*tg_o*DT*onstep(2)
+            if (tg_x .lt. R1) then
+               tg_m = tg_m + (R1 - tg_x)*tg_rs(k)/tg_rr(k)
+               tg_x = R1
+            endif
+            tg_rr(k) = tg_x
+            tg_rs(k) = max(0., tg_m)
+            do k = ksed1(2), kts, -1
+               tg_o = 1./dzq(k)
+               tg_ten(k,3) = tg_ten(k,3)                                     &
+                           + (tg_sd(k+1)-tg_sd(k))*tg_o*onstep(2)*(1./rho(k))
+               tg_x = tg_rr(k) + (tg_rq(k+1)-tg_rq(k))*tg_o*DT*onstep(2)
+               tg_m = tg_rs(k) + (tg_sd(k+1)-tg_sd(k))*tg_o*DT*onstep(2)
+               if (tg_x .lt. R1) then
+                  tg_m = tg_m + (R1 - tg_x)*tg_rs(k)/tg_rr(k)
+                  tg_x = R1
+               endif
+               tg_rr(k) = tg_x
+               tg_rs(k) = max(0., tg_m)
+            enddo
+!  qv_tag: tagged ice reaching the surface (mirror of real pptice)
+            if (tg_rr(kts).gt.R1*rr_min) tg_ppt(4) = tg_ppt(4) + tg_sd(kts)*DT*onstep(2)            
+         enddo
          do n = 1, nstep
             do k = kte, kts, -1
                sed_i(k) = vtik(k)*ri(k)
@@ -4092,11 +4365,61 @@ module module_mp_thompson
             endif 
          enddo
       endif
+      if (ltag) call tg_dbg_stage(6)
 
 !+---+-----------------------------------------------------------------+
 
       if (ANY(L_qs .eqv. .true.)) then
          nstep = nint(1./onstep(3))
+                  ! qv_tag MP tagging: snow tag sediments exactly as real snow. A copy of
+         ! real rs (tg_rr) runs the same substeps and R1 floors; tag flux = vt x
+         ! tag density; water created by a floor gets the local tag fraction
+         ! (vapor tag fraction where the level had no snow)
+         do k = kts, kte
+            tg_fv = 0.
+            if (qv1d(k) .gt. 0.) tg_fv = tg1d(k,1)/qv1d(k)
+            tg_x = qs1d(k) + qsten(k)*DT
+            if (rs(k) .ne. R1) then
+               tg_fk = max(0., tg1d(k,5) + tg_ten(k,5)*DT)/tg_x
+            else
+               tg_fk = tg_fv
+            endif
+            tg_rr(k) = rs(k)
+            tg_rs(k) = rs(k)*tg_fk
+         enddo
+         do n = 1, nstep
+            do k = kte, kts, -1
+               tg_sd(k) = vtsk(k)*tg_rs(k)
+               tg_rq(k) = vtsk(k)*tg_rr(k)
+            enddo
+            k = kte
+            tg_o = 1./dzq(k)
+            tg_ten(k,5) = tg_ten(k,5) - tg_sd(k)*tg_o*onstep(3)*(1./rho(k))
+            tg_x = tg_rr(k) - tg_rq(k)*tg_o*DT*onstep(3)
+            tg_m = tg_rs(k) - tg_sd(k)*tg_o*DT*onstep(3)
+            if (tg_x .lt. R1) then
+               tg_m = tg_m + (R1 - tg_x)*tg_rs(k)/tg_rr(k)
+               tg_x = R1
+            endif
+            tg_rr(k) = tg_x
+            tg_rs(k) = max(0., tg_m)
+            do k = ksed1(3), kts, -1
+               tg_o = 1./dzq(k)
+               tg_ten(k,5) = tg_ten(k,5)                                     &
+                           + (tg_sd(k+1)-tg_sd(k))*tg_o*onstep(3)*(1./rho(k))
+               tg_x = tg_rr(k) + (tg_rq(k+1)-tg_rq(k))*tg_o*DT*onstep(3)
+               tg_m = tg_rs(k) + (tg_sd(k+1)-tg_sd(k))*tg_o*DT*onstep(3)
+               if (tg_x .lt. R1) then
+                  tg_m = tg_m + (R1 - tg_x)*tg_rs(k)/tg_rr(k)
+                  tg_x = R1
+               endif
+               tg_rr(k) = tg_x
+               tg_rs(k) = max(0., tg_m)
+            enddo
+            !  qv_tag: tagged snow reaching the surface (mirror of real pptsnow)
+            if (tg_rr(kts).gt.R1*rr_min) tg_ppt(2) = tg_ppt(2) + tg_sd(kts)*DT*onstep(3)
+         enddo
+         
          do n = 1, nstep
             do k = kte, kts, -1
                sed_s(k) = vtsk(k)*rs(k)
@@ -4122,6 +4445,7 @@ module module_mp_thompson
             endif 
          enddo
       endif
+      if (ltag) call tg_dbg_stage(7)
 
 !+---+-----------------------------------------------------------------+
 
@@ -4160,13 +4484,29 @@ module module_mp_thompson
 
             do n = 1, niter
                rg_tmp(:) = rg(:)
-               call semi_lagrange_sedim(kte,dzq,vtgk,rg,graulsfc,pfil,dtcfl,R1)
+               ! qv_tag MP tagging: graupel tag sediments with the real geometry
+               if (n .eq. 1) then
+                  do k = kts, kte
+                     tg_x = qg1d(k) + DT*qgten(k)
+                     if (rg(k) .ne. R1) then
+                        tg_fk = max(0., tg1d(k,6) + DT*tg_ten(k,6))/tg_x
+                     else
+                        tg_fk = 0.
+                        if (qv1d(k) .gt. 0.) tg_fk = tg1d(k,1)/qv1d(k)
+                     endif
+                     tg_rs(k) = rg(k)*tg_fk
+                  enddo
+               endif
+               tg_sd(kts:kte) = tg_rs(kts:kte)
+               call semi_lagrange_sedim(kte,dzq,vtgk,rg,graulsfc,pfil,dtcfl,R1,rqt=tg_rs,precipt=tg_psfc)
                do k = kts, kte
                   orhodt = 1./(rho(k)*dt)
                   qgten(k) = qgten(k) + (rg(k) - rg_tmp(k))*orhodt
+                  tg_ten(k,6) = tg_ten(k,6) + (tg_rs(k) - tg_sd(k))*orhodt
                   pfil1(k) = pfil1(k) + pfil(k)
                enddo
                pptgraul = pptgraul + graulsfc
+               tg_ppt(3) = tg_ppt(3) + tg_psfc
                do k = kte+1, kts, -1
                   vtgk(k) = 0.
                enddo
@@ -4191,6 +4531,7 @@ module module_mp_thompson
             enddo
          endif ! if(.not. sedi_semi) then
       endif 
+      if (ltag) call tg_dbg_stage(8)
 
 !+---+-----------------------------------------------------------------+
 !> - Instantly melt any cloud ice into cloud water if above 0C and
@@ -4203,6 +4544,12 @@ module module_mp_thompson
                qcten(k) = qcten(k) + xri*odt
                ncten(k) = ncten(k) + ni1d(k)*odt
                qiten(k) = qiten(k) - xri*odt
+               ! qv_tag MP tagging: instant melt moves the whole provisional ice tag
+               if (ltag) then
+                  tg_x = max(0., tg1d(k,3) + tg_ten(k,3)*DT)
+                  tg_ten(k,2) = tg_ten(k,2) + tg_x*odt
+                  tg_ten(k,3) = tg_ten(k,3) - tg_x*odt
+               endif
                niten(k) = -ni1d(k)*odt
                tten(k) = tten(k) - lfus*ocp(k)*xri*odt*(1-IFDRY)
       !diag
@@ -4216,6 +4563,12 @@ module module_mp_thompson
                qiten(k) = qiten(k) + xrc*odt
                niten(k) = niten(k) + xnc*odt
                qcten(k) = qcten(k) - xrc*odt
+               ! qv_tag MP tagging: instant freeze moves the whole provisional cloud tag
+               if (ltag) then
+                  tg_x = max(0., tg1d(k,2) + tg_ten(k,2)*DT)
+                  tg_ten(k,3) = tg_ten(k,3) + tg_x*odt
+                  tg_ten(k,2) = tg_ten(k,2) - tg_x*odt
+               endif
                ncten(k) = ncten(k) - xnc*odt
                tten(k) = tten(k) + lfus2*ocp(k)*xrc*odt*(1-IFDRY)
       !diag
@@ -4223,12 +4576,22 @@ module module_mp_thompson
             endif
          enddo
       endif
+      if (ltag) call tg_dbg_stage(9)
 
 !+---+-----------------------------------------------------------------+
 !> - All tendencies computed, apply and pass back final values to parent.
 !+---+-----------------------------------------------------------------+
       do k = kts, kte
          t1d(k)  = t1d(k) + tten(k)*DT
+         ! qv_tag MP tagging: apply tag tendencies; mirror the qv 1e-10 clip
+         ! (water added by the clip goes to the tag at the pre-step vapor fraction)
+         if (ltag) then
+            tg_x = qv1d(k) + qvten(k)*DT
+            tg_f(1) = 0.
+            if (qv1d(k) .gt. 0.) tg_f(1) = tg1d(k,1)/qv1d(k)
+            tg1d(k,:) = tg1d(k,:) + tg_ten(k,:)*DT
+            if (tg_x .lt. 1.E-10) tg1d(k,1) = tg1d(k,1) + (1.E-10 - tg_x)*tg_floor_frac
+         endif
          qv1d(k) = max(1.E-10, qv1d(k) + qvten(k)*DT)
          qc1d(k) = qc1d(k) + qcten(k)*DT
          nc1d(k) = max(2./rho(k), min(nc1d(k) + ncten(k)*DT, Nt_c_max))
@@ -4298,6 +4661,14 @@ module module_mp_thompson
          if (qs1d(k) .le. R1) qs1d(k) = 0.0
          qg1d(k) = qg1d(k) + qgten(k)*DT
          if (qg1d(k) .le. R1) qg1d(k) = 0.0
+         ! qv_tag MP tagging: zero a tag wherever its real species was zeroed
+         if (ltag) then
+            if (qc1d(k) .le. 0.) tg1d(k,2) = 0.
+            if (qi1d(k) .le. 0.) tg1d(k,3) = 0.
+            if (qr1d(k) .le. 0.) tg1d(k,4) = 0.
+            if (qs1d(k) .le. 0.) tg1d(k,5) = 0.
+            if (qg1d(k) .le. 0.) tg1d(k,6) = 0.
+         endif
       enddo
 
 ! Diagnostics
@@ -4382,7 +4753,34 @@ module module_mp_thompson
             qcten1(k) = qcten(k)*DT
          enddo
       endif calculate_extended_diagnostics
-   
+   contains
+
+!> DEBUG DBGST (qv_tag, remove later): compare tag and real provisional
+!! state (q1d + ten*DT) for all six species at one MP stage; print any
+!! relative difference above 1e-12 (mode 2: tag must equal real)
+      subroutine tg_dbg_stage(istage)
+         integer, intent(in) :: istage
+         integer :: kk, nn
+         real(wp) :: rr6(6), tt
+         do kk = kts, kte
+            rr6(1) = qv1d(kk) + qvten(kk)*DT
+            rr6(2) = qc1d(kk) + qcten(kk)*DT
+            rr6(3) = qi1d(kk) + qiten(kk)*DT
+            rr6(4) = qr1d(kk) + qrten(kk)*DT
+            rr6(5) = qs1d(kk) + qsten(kk)*DT
+            rr6(6) = qg1d(kk) + qgten(kk)*DT
+            do nn = 1, 6
+               tt = tg1d(kk,nn) + tg_ten(kk,nn)*DT
+               if (abs(rr6(nn)) .gt. 1.e-14) then
+                  if (abs(tt-rr6(nn)) .gt. 1.e-12*abs(rr6(nn)))           &
+                     print '(a,i3,i7,i5,i3,3es14.6)', 'DBGST', istage,    &
+                           tg_ncall, kk, nn, rr6(nn), tt,                 &
+                           (tt-rr6(nn))/rr6(nn)
+               endif
+            enddo
+         enddo
+      end subroutine tg_dbg_stage
+      
    end subroutine mp_thompson
 !>@}
 
@@ -6227,8 +6625,9 @@ module module_mp_thompson
 !! with mass conservation and positive definite advection
 !! 2nd order interpolation with monotonic piecewise parabolic method is used.
 !! This routine is under assumption of decfl < 1 for semi_Lagrangian 
-!!(Juang and Hong, 2010 \cite Henry_Juang_2010).
-   SUBROUTINE semi_lagrange_sedim(km,dzl,wwl,rql,precip,pfsan,dt,R1)
+   !!(Juang and Hong, 2010 \cite Henry_Juang_2010).
+   SUBROUTINE semi_lagrange_sedim(km,dzl,wwl,rql,precip,pfsan,dt,R1,rqt,precipt)
+!   SUBROUTINE semi_lagrange_sedim(km,dzl,wwl,rql,precip,pfsan,dt,R1)
 !-------------------------------------------------------------------
 !
 ! dzl    depth of model layer in meter
@@ -6251,6 +6650,11 @@ module module_mp_thompson
       real(wp), intent(out) :: precip
       real(wp), intent(inout) :: rql(km)
       real(wp), intent(out)  :: pfsan(km)
+      ! qv_tag MP tagging (optional): tag remapped with the real geometry,
+      ! each piece weighted by its source cell's tag fraction tfr
+      real(wp), intent(inout), optional :: rqt(km)
+      real(wp), intent(out), optional :: precipt
+      real(wp) :: tfr(km+1), qnt(km), qsumt
       integer ::  k,m,kk,kb,kt
       real(wp) :: tl,tl2,qql,dql,qqd
       real(wp) :: th,th2,qqh,dqh
@@ -6267,6 +6671,15 @@ module module_mp_thompson
       qq(:) = 0.0
       dz(:) = dzl(:)
       ww(:) = wwl(:)
+      if (present(precipt)) precipt = 0.0
+      tfr = 0.0
+      qnt = 0.0
+      if (present(rqt)) then
+         do k = 1, km
+            if (rql(k) .gt. 0.) tfr(k) = rqt(k)/rql(k)
+         enddo
+      endif
+      
       do k = 1,km
         if(rql(k).gt.R1) then 
           qq(k) = rql(k) 
@@ -6397,6 +6810,7 @@ module module_mp_thompson
                  qqh=qqd*th2+qmi(kb)*th
                  qql=qqd*tl2+qmi(kb)*tl
                  qn(k) = (qqh-qql)/(th-tl)
+                 qnt(k) = tfr(kb)*qn(k)
                else if( kt.gt.kb ) then
                  tl=(zi(k)-za(kb))/dza(kb)
                  tl2=tl*tl
@@ -6405,10 +6819,12 @@ module module_mp_thompson
                  dql = qa(kb)-qql
                  zsum  = (1.-tl)*dza(kb)
                  qsum  = dql*dza(kb)
+                 qsumt = tfr(kb)*dql*dza(kb)
                  if( kt-kb.gt.1 ) then
                  do m=kb+1,kt-1
                    zsum = zsum + dza(m)
                    qsum = qsum + qa(m) * dza(m)
+                   qsumt = qsumt + tfr(m)*qa(m)*dza(m)
                  enddo
                  endif
                  th=(zi(k+1)-za(kt))/dza(kt)
@@ -6417,7 +6833,9 @@ module module_mp_thompson
                  dqh=qqd*th2+qmi(kt)*th
                  zsum  = zsum + th*dza(kt)
                  qsum  = qsum + dqh*dza(kt)
+                 qsumt = qsumt + tfr(kt)*dqh*dza(kt)
                  qn(k) = qsum/zsum
+                 qnt(k) = qsumt/zsum
                endif
                cycle intp
              endif
@@ -6428,6 +6846,7 @@ module module_mp_thompson
       sum_precip: do k=1,km
                     if( za(k).lt.0.0 .and. za(k+1).le.0.0 ) then
                       precip = precip + qa(k)*dza(k)
+                      if (present(precipt)) precipt = precipt + tfr(k)*qa(k)*dza(k)
                       net_flx(k) =  qa(k)*dza(k)
                       cycle sum_precip
                     else if ( za(k).lt.0.0 .and. za(k+1).gt.0.0 ) then
@@ -6436,6 +6855,7 @@ module module_mp_thompson
                       qqd = 0.5*(qpi(k)-qmi(k))
                       qqh = qqd*th2+qmi(k)*th
                       precip = precip + qqh*dza(k)
+                      if (present(precipt)) precipt = precipt + tfr(k)*qqh*dza(k)
                       net_flx(k) = qqh*dza(k)
                       exit sum_precip
                     endif
@@ -6453,6 +6873,21 @@ module module_mp_thompson
 !
 ! replace the new values
       rql(:) = max(qn(:),R1)
+      ! qv_tag: mirror the real floor max(qn,R1); floor-created water gets
+      ! the cell's tag fraction (arrival fraction, or source fraction if empty)
+      if (present(rqt)) then
+         do k = 1, km
+            if (qn(k) .lt. R1) then
+               if (qn(k) .gt. 0.) then
+                  rqt(k) = R1*(max(qnt(k), 0.0)/qn(k))
+               else
+                  rqt(k) = R1*tfr(k)
+               endif
+            else
+               rqt(k) = max(qnt(k), 0.0)
+            endif
+         enddo
+      endif
 
    END SUBROUTINE semi_lagrange_sedim
 

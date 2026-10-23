@@ -19,7 +19,7 @@
         im, levs, kdt, tend_opt_mp, nrcm, nncl, ntcw, ntrac, imp_physics, imp_physics_gfdl, imp_physics_thompson,         &
         imp_physics_tempo, imp_physics_nssl, imp_physics_mg, imp_physics_fer_hires, cal_pre, cplflx, cplchm, cpllnd,      &
         progsigma, con_g, rhowater, rainmin, dtf, frain, rainc, rain1, rann, xlat, xlon, ten_t, ten_u, ten_v, ten_q, dudt,&
-        dvdt, dtdt, dqdt, gt0, gu0, gv0, gq0, prsl, prsi, phii, tsfc, ice, phil, htop,                                    &
+        dvdt, dtdt, dqdt, gt0, gu0, gv0, gq0, prsl, prsi, phii, tsfc, ice, phil, htop, ntqv, nqvtag,                                     &
         refl_10cm, imfshalcnv,imfshalcnv_gf,imfdeepcnv,imfdeepcnv_gf,imfdeepcnv_samf, con_t0c, snow, graupel,             &
         rain0, ice0, snow0, graupel0, del, rain, domr_diag, domzr_diag, domip_diag, doms_diag, tprcp, srflag, sr,         &
         cnvprcp, totprcp, totice, totsnw, totgrp, cnvprcpb, totprcpb, toticeb, totsnwb, totgrpb, rain_cpl, rainc_cpl,     &
@@ -27,14 +27,18 @@
         drain_cpl, dsnow_cpl, lsm, lsm_ruc, lsm_noahmp, raincprv, rainncprv, iceprv, snowprv,                             &
         graupelprv, draincprv, drainncprv, diceprv, dsnowprv, dgraupelprv, dtp, num_diag_buckets,                         &
         dtend, dtidx, index_of_temperature, index_of_process_mp,ldiag3d, qdiag3d,dqdt_qmicro, lssav, num_dfi_radar,       &
-        fh_dfi_radar,index_of_process_dfi_radar, ix_dfi_radar, dfi_radar_tten, radar_tten_limits, fhour, prevsq,      &
-        iopt_lake, iopt_lake_clm, lkm, use_lake_model, errmsg, errflg)
+        fh_dfi_radar,index_of_process_dfi_radar, ix_dfi_radar, dfi_radar_tten, radar_tten_limits, fhour, prevsq,          &
+        iopt_lake, iopt_lake_clm, lkm, use_lake_model,                                                                    &
+        raincd_tag, raincs_tag, rainmp_tag, snowmp_tag, precc, precsc, precl, precsl,                                     &
+        precrc_tag, precsc_tag, precrl_tag, precsl_tag, errmsg, errflg)
 !
       use machine, only: kind_phys
       use calpreciptype_mod, only: calpreciptype
       implicit none
 
-      integer, intent(in) :: im, levs, kdt, tend_opt_mp, nrcm, nncl, ntcw, ntrac, num_dfi_radar, index_of_process_dfi_radar
+      !integer, intent(in) :: im, levs, kdt, tend_opt_mp, nrcm, nncl, ntcw, ntrac, num_dfi_radar, index_of_process_dfi_radar
+      integer, intent(in) :: im, levs, kdt, tend_opt_mp, nrcm, nncl, ntcw, ntrac, ntqv, num_dfi_radar, index_of_process_dfi_radar
+      integer, intent(in), optional :: nqvtag
       integer, intent(in) :: imp_physics, imp_physics_gfdl, imp_physics_thompson, imp_physics_mg, imp_physics_fer_hires
       integer, intent(in) :: imp_physics_nssl, iopt_lake_clm, iopt_lake, lkm, imp_physics_tempo
       logical, intent(in) :: cal_pre, lssav, ldiag3d, qdiag3d, cplflx, cplchm, cpllnd, progsigma, exticeden
@@ -55,6 +59,11 @@
       real(kind=kind_phys), dimension(:),      intent(in)    :: rain1, xlat, xlon, tsfc
       real(kind=kind_phys), dimension(:),      intent(inout) :: ice, snow, graupel, rainc
       real(kind=kind_phys), dimension(:),      intent(in), optional :: rain0, ice0, snow0, graupel0
+            ! qv_tag: CESM/iCESM-style precipitation diagnostics (m per step)
+      real(kind=kind_phys), dimension(:), intent(in),  optional :: raincd_tag, raincs_tag, rainmp_tag, snowmp_tag
+      real(kind=kind_phys), dimension(:), intent(out), optional :: precc, precsc, precl, precsl
+      real(kind=kind_phys), dimension(:), intent(out), optional :: precrc_tag, precsc_tag, precrl_tag, precsl_tag
+      real(kind=kind_phys) :: tg_cnv
       real(kind=kind_phys), dimension(:,:),    intent(in)    :: rann
       real(kind=kind_phys), dimension(:,:),    intent(in)    :: prsl, del
       real(kind=kind_phys), dimension(:,:),    intent(in)    :: prsi, phii,phil
@@ -114,7 +123,8 @@
       real(kind=kind_phys) :: crain, csnow, onebg, tem, total_precip, tem1, tem2, ttend
       real(kind=kind_phys), dimension(im) :: domr, domzr, domip, doms, t850, work1
       real(kind=kind_phys), dimension(im,levs) :: save_t
-
+      real(kind=kind_phys) :: old_qv_val, old_qv_tag_val
+      
       real :: snowrat,grauprat,icerat,curat,prcpncfr,prcpcufr
       real :: rhonewsnow,rhoprcpice,rhonewgr,rhonewice
 
@@ -139,6 +149,7 @@
                    !the temperature tendency application is overwritten by radar tendencies below
       
       case_MP_ten: select case (tend_opt_mp)
+
         case (1) !immediately apply tendencies
                   !Current state = current state + dt*current tendency
                   !Accumulated tendency unchanged
@@ -147,11 +158,20 @@
               gt0(i,k) = gt0(i,k) + dtp*ten_t(i,k)
               gu0(i,k) = gu0(i,k) + dtp*ten_u(i,k)
               gv0(i,k) = gv0(i,k) + dtp*ten_v(i,k)
+!              old_qv_val = gq0(i,k,ntqv)
+!              if (present(nqvtag)) old_qv_tag_val = gq0(i,k,nqvtag)
               do n = 1, ntrac
                 gq0(i,k,n) = gq0(i,k,n) + dtp*ten_q(i,k,n)
               end do
+!              if (present(nqvtag)) then
+!                if (old_qv_val > 1.0e-9_kind_phys) then
+!                !if (old_qv_val > 0.0_kind_phys) then
+!                  gq0(i,k,nqvtag) = old_qv_tag_val * (gq0(i,k,ntqv) / old_qv_val)
+!                end if
+!              end if
             end do
           end do
+                
         case (2) !add tendencies to sum
                   !Accumulated tendency = accumulated tendency + current tendency
                   !Current state unchanged
@@ -513,7 +533,38 @@
           enddo
         endif
       endif
-
+! qv_tag: CESM-style precipitation (m per step). Real: PRECC, PRECSC, PRECL, PRECSL
+! (PRECT = tprcp). Convective rain/snow uses the same tsfc rule as crain/csnow above;
+! tagged convective precip follows the same rule.
+      if (present(precc) .and. present(precsc) .and. present(precl) .and. present(precsl)) then
+        do i = 1, im
+          precc(i)  = rainc(i)
+          precl(i)  = frain * rain1(i)
+          precsl(i) = zero
+          if (present(snow0) .and. present(ice0) .and. present(graupel0)) &
+            precsl(i) = frain * (snow0(i) + ice0(i) + graupel0(i))
+          if (tsfc(i) >= 273.15_kind_phys) then
+            precsc(i) = zero
+          else
+            precsc(i) = rainc(i)
+          endif
+        enddo
+      endif
+      if (present(precrc_tag) .and. present(raincd_tag) .and. present(rainmp_tag)) then
+        do i = 1, im
+          tg_cnv = frain * (raincd_tag(i) + raincs_tag(i))
+          if (tsfc(i) >= 273.15_kind_phys) then
+            precrc_tag(i) = tg_cnv
+            precsc_tag(i) = zero
+          else
+            precrc_tag(i) = zero
+            precsc_tag(i) = tg_cnv
+          endif
+          precrl_tag(i) = frain * rainmp_tag(i)
+          precsl_tag(i) = frain * snowmp_tag(i)
+        enddo
+     endif
+     
       if_save_fields: if (lssav) then
 !        if (Model%me == 0) print *,'in phys drive, kdt=',Model%kdt, &
 !          'totprcpb=', Diag%totprcpb(1,1),'totprcp=',Diag%totprcp(1), &

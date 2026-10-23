@@ -13,6 +13,7 @@ module mp_thompson
       use module_mp_thompson, only : thompson_init, mp_gt_driver, thompson_finalize, calc_effectRad
       use module_mp_thompson, only : naIN0, naIN1, naCCN0, naCCN1, eps
       use module_mp_thompson, only : re_qc_min, re_qc_max, re_qi_min, re_qi_max, re_qs_min, re_qs_max
+      use module_mp_thompson, only : tg_floor_frac
 
       use module_mp_thompson_make_number_concentrations, only: make_IceNumber, make_DropletNumber, make_RainNumber
 
@@ -384,7 +385,8 @@ module mp_thompson
                               spp_stddev_cutoff,                   &
                               cplchm, pfi_lsan, pfl_lsan,          &
                               is_initialized, fs_fac_rain, fs_fac_snow, &
-                              ten_q, dspechum, dqc, dqr,           &
+                              ten_q, gq0, nqvtag, qvtag_floor_frac, rainmp_tag, snowmp_tag, &
+                              dspechum, dqc, dqr,                  &
                               dqi, dqs, dqg, dni, dnr, dnc, dnwfa, &
                               dnifa, dtgrs, ten_u, ten_v, errmsg, errflg)
 
@@ -452,6 +454,11 @@ module mp_thompson
          logical,                   intent(in)    :: reset_diag3d
          
          real(kind_phys),           intent(  out) :: ten_q(:,:,:)
+         real(kind_phys),           intent(in   ) :: gq0(:,:,:)
+         integer,         optional, intent(in   ) :: nqvtag
+         real(kind_phys), optional, intent(in   ) :: qvtag_floor_frac
+         real(kind_phys), optional, intent(inout) :: rainmp_tag(:)   ! qv_tag: tagged explicit rain, m per step
+         real(kind_phys), optional, intent(inout) :: snowmp_tag(:)   ! qv_tag: tagged explicit snow+graupel+ice, m per step
          real(kind_phys),           intent(  out) :: ten_u(:,:)
          real(kind_phys),           intent(  out) :: ten_v(:,:)
          real(kind_phys),           intent(  out) :: dspechum(:,:)
@@ -505,11 +512,19 @@ module mp_thompson
          real(kind_phys) :: ice_mp(1:ncol)                  ! mm, dummy, not used
          real(kind_phys) :: snow_mp(1:ncol)                 ! mm, dummy, not used
          real(kind_phys) :: delta_rain_mp(1:ncol)           ! mm
+         real(kind_phys) :: tg_pcp(1:ncol,2)                ! qv_tag: tagged precip from driver, mm (1=rain, 2=snow+graupel+ice)
          real(kind_phys) :: delta_graupel_mp(1:ncol)        ! mm
          real(kind_phys) :: delta_ice_mp(1:ncol)            ! mm
          real(kind_phys) :: delta_snow_mp(1:ncol)           ! mm
          
          real(kind_phys) :: new_spechum(1:ncol,1:nlev)
+         ! qv_tag MP tagging: local tags in mixing ratio (1=v,2=l,3=i,4=r,5=s,6=g)
+         real(kind_phys) :: tg_q(1:ncol,1:nlev,6)
+         logical         :: ltag
+         integer         :: n6
+         integer, save   :: ndbgm = 0      ! DEBUG DBGM2/3 (remove later)
+         integer         :: kdb
+         real(kind_phys) :: rdb(6), tdb(6)
          real(kind_phys) :: new_qc(1:ncol,1:nlev)
          real(kind_phys) :: new_qr(1:ncol,1:nlev)
          real(kind_phys) :: new_qi(1:ncol,1:nlev)
@@ -690,6 +705,40 @@ module mp_thompson
          ! was using these arrays, but it is somewhat dangerous.
          qv = new_spechum/(1.0_kind_phys-new_spechum)
 
+         ! qv_tag: tags use the same conversion factors as the real species
+         ltag = .false.
+         if (present(nqvtag)) then
+            if (nqvtag > 0) ltag = .true.
+         endif
+         tg_floor_frac = 0.0_kind_phys
+         if (present(qvtag_floor_frac)) tg_floor_frac = qvtag_floor_frac
+         tg_q = 0.0_kind_phys
+         ! DEBUG DBGM2: tag vs real at MP entry (mode 2 must match)
+         if (ltag) then
+            ndbgm = ndbgm + 1
+            do kdb = 1, nlev
+               rdb = (/ spechum(1,kdb), qc(1,kdb), qi(1,kdb), qr(1,kdb), qs(1,kdb), qg(1,kdb) /)
+               tdb = gq0(1,kdb,nqvtag:nqvtag+5)
+               do n6 = 1, 6
+                  if (rdb(n6) > 1.e-14_kind_phys) then
+                     if (abs(tdb(n6)-rdb(n6)) > 1.e-12_kind_phys*rdb(n6))           &
+                        print '(a,3i6,3es13.5)', 'DBGM2', ndbgm, kdb, n6,          &
+                              rdb(n6), tdb(n6), (tdb(n6)-rdb(n6))/rdb(n6)
+                  endif
+               enddo
+            enddo
+         endif
+         if (ltag) then
+            tg_q(:,:,1) = gq0(:,:,nqvtag)/(1.0_kind_phys-new_spechum)
+            do n6 = 2, 6
+               if (convert_dry_rho) then
+                  tg_q(:,:,n6) = gq0(:,:,nqvtag+n6-1)/(1.0_kind_phys-new_spechum)
+               else
+                  tg_q(:,:,n6) = gq0(:,:,nqvtag+n6-1)
+               endif
+            enddo
+         endif
+
          if (convert_dry_rho) then
            new_qc = new_qc/(1.0_kind_phys-new_spechum)
            new_qr = new_qr/(1.0_kind_phys-new_spechum)
@@ -726,6 +775,7 @@ module mp_thompson
          delta_graupel_mp = 0
          delta_ice_mp     = 0
          delta_snow_mp    = 0
+         tg_pcp           = 0
 
          ! Flags for calculating radar reflectivity; diagflag is redundant
          if (do_radar_ref) then
@@ -808,14 +858,15 @@ module mp_thompson
          end if set_extended_diagnostic_pointers
          !> - Call mp_gt_driver() with or without aerosols, with or without effective radii, ...
          if (is_aerosol_aware) then
-            call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
+            call mp_gt_driver(qtag=tg_q, &
+                              qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                               nc=new_nc, nwfa=new_nwfa, nifa=new_nifa, nwfa2d=nwfa2d, nifa2d=nifa2d,     &
                               tt=new_tgrs, p=prsl, w=w, dz=dz, dt_in=dtstep, dt_inner=dt_inner,  &
                               sedi_semi=sedi_semi, decfl=decfl, lsm=islmsk,                  &
                               rainnc=rain_mp, rainncv=delta_rain_mp,                         &
                               snownc=snow_mp, snowncv=delta_snow_mp,                         &
                               icenc=ice_mp, icencv=delta_ice_mp,                             &
-                              graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr,      &
+                              graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr, tgpcpv=tg_pcp,      &
                               refl_10cm=refl_10cm,                                           &
                               diagflag=diagflag, do_radar_ref=do_radar_ref_mp,               &
                               max_hail_diam_sfc=max_hail_diam_sfc,                           &
@@ -851,14 +902,15 @@ module mp_thompson
                               qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
                               fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow)
          else if (merra2_aerosol_aware) then
-             call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
+             call mp_gt_driver(qtag=tg_q, &
+                              qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                                nc=new_nc, nwfa=new_nwfa, nifa=new_nifa,                                   &
                                tt=new_tgrs, p=prsl, w=w, dz=dz, dt_in=dtstep, dt_inner=dt_inner,  &
                                sedi_semi=sedi_semi, decfl=decfl, lsm=islmsk,                  &
                                rainnc=rain_mp, rainncv=delta_rain_mp,                         &
                                snownc=snow_mp, snowncv=delta_snow_mp,                         &
                                icenc=ice_mp, icencv=delta_ice_mp,                             &
-                               graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr,      &
+                               graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr, tgpcpv=tg_pcp,      &
                                refl_10cm=refl_10cm,                                           &
                                diagflag=diagflag, do_radar_ref=do_radar_ref_mp,               &
                                max_hail_diam_sfc=max_hail_diam_sfc,                           &
@@ -894,13 +946,14 @@ module mp_thompson
                                qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
                                fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow)
          else
-            call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
+            call mp_gt_driver(qtag=tg_q, &
+                              qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                               tt=new_tgrs, p=prsl, w=w, dz=dz, dt_in=dtstep, dt_inner=dt_inner,  &
                               sedi_semi=sedi_semi, decfl=decfl, lsm=islmsk,                  &
                               rainnc=rain_mp, rainncv=delta_rain_mp,                         &
                               snownc=snow_mp, snowncv=delta_snow_mp,                         &
                               icenc=ice_mp, icencv=delta_ice_mp,                             &
-                              graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr,      &
+                              graupelnc=graupel_mp, graupelncv=delta_graupel_mp, sr=sr, tgpcpv=tg_pcp,      &
                               refl_10cm=refl_10cm,                                           &
                               diagflag=diagflag, do_radar_ref=do_radar_ref_mp,               &
                               max_hail_diam_sfc=max_hail_diam_sfc,                           &
@@ -943,6 +996,15 @@ module mp_thompson
 
          !> - Convert water vapor mixing ratio back to specific humidity
          new_spechum = qv/(1.0_kind_phys+qv)
+         ! qv_tag: convert tags back with the real factors
+         if (ltag) then
+            tg_q(:,:,1) = tg_q(:,:,1)/(1.0_kind_phys+qv)
+            if (convert_dry_rho) then
+               do n6 = 2, 6
+                  tg_q(:,:,n6) = tg_q(:,:,n6)/(1.0_kind_phys+qv)
+               enddo
+            endif
+         endif         
 
          if (convert_dry_rho) then
            new_qc = new_qc/(1.0_kind_phys+qv)
@@ -968,6 +1030,9 @@ module mp_thompson
          ice     = ice     + max(0.0, delta_ice_mp/1000.0_kind_phys)
          snow    = snow    + max(0.0, delta_snow_mp/1000.0_kind_phys)
          rain    = rain    + max(0.0, (delta_rain_mp - (delta_graupel_mp + delta_ice_mp + delta_snow_mp))/1000.0_kind_phys)
+         ! qv_tag: tagged explicit precip, same conversion as the real amounts above
+         if (present(rainmp_tag)) rainmp_tag = rainmp_tag + max(0.0, tg_pcp(:,1)/1000.0_kind_phys)
+         if (present(snowmp_tag)) snowmp_tag = snowmp_tag + max(0.0, tg_pcp(:,2)/1000.0_kind_phys)
 
          ! Recompute sr at last subcycling step
          if (nsteps>1 .and. istep == nsteps) then
@@ -982,6 +1047,28 @@ module mp_thompson
          end if
 
          dspechum = (new_spechum - spechum)/dtp
+         ! qv_tag: tag tendencies (applied by GFS_MP_generic_post)
+         if (ltag) then
+            do n6 = 1, 6
+               ten_q(:,:,nqvtag+n6-1) = (tg_q(:,:,n6) - gq0(:,:,nqvtag+n6-1))/dtp
+            enddo
+         endif
+         ! DEBUG DBGM3: tag vs real at MP exit (mode 2 must match)
+         if (ltag) then
+            do kdb = 1, nlev
+               rdb = (/ new_spechum(1,kdb), new_qc(1,kdb), new_qi(1,kdb),         &
+                        new_qr(1,kdb), new_qs(1,kdb), new_qg(1,kdb) /)
+               tdb = tg_q(1,kdb,:)
+               do n6 = 1, 6
+                  if (rdb(n6) > 1.e-14_kind_phys) then
+                     if (abs(tdb(n6)-rdb(n6)) > 1.e-12_kind_phys*rdb(n6))           &
+                        print '(a,3i6,3es13.5)', 'DBGM3', ndbgm, kdb, n6,          &
+                              rdb(n6), tdb(n6), (tdb(n6)-rdb(n6))/rdb(n6)
+                  endif
+               enddo
+            enddo
+         endif
+
          dqc = (new_qc - qc)/dtp
          dqr = (new_qr - qr)/dtp
          dqi = (new_qi - qi)/dtp

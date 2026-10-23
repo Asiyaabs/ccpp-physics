@@ -13,7 +13,7 @@
 !! thermals driven by surface heating. 
 !!\section mfpbltq_gen GFS mfpblt General Algorithm 
 !> @{
-      subroutine mfpbltq(im,ix,km,kmpbl,ntcw,ntrac1,delt,
+      subroutine mfpbltq(im,ix,km,kmpbl,ntcw,ntrac1,delt, nqvtagv,
      &   cnvflg,zl,zm,q1,t1,u1,v1,plyr,pix,thlx,thvx,
      &   gdx,hpbl,kpbl,vpert,buo,wush,tkemean,vez0fun,xmf,
      &   tcko,qcko,ucko,vcko,xlamueq,a1)
@@ -27,7 +27,7 @@
 !
       implicit none
 !
-      integer              im, ix, km, kmpbl, ntcw, ntrac1
+      integer              im, ix, km, kmpbl, ntcw, ntrac1, nqvtagv
 !    &,                    me
       integer              kpbl(im)
       logical              cnvflg(im)
@@ -48,6 +48,10 @@ c  local variables and arrays
       integer   i, j, k, n, ndc
       integer   kpblx(im), kpbly(im)
 !
+      real(kind=kind_phys) qtu_total, tag_total, frac_vap
+      real(kind=kind_phys) dbg_r, dbg_t, dbg_e
+      integer, save :: ndbg = 0
+      real(kind=kind_phys) qscl(im,km)
       real(kind=kind_phys) dt2,     dz,      ce0,
      &                     cm,      cq,      tkcrt,
      &                     factor,  gocp,    cmxfac,
@@ -429,6 +433,7 @@ c  local variables and arrays
             if (dq > 0.) then
               gamma = el2orc * qs / (tlu**2)
               qlu = dq / (1. + gamma)
+              qscl(i,k) = (qs + qlu) / qtu(i,k)
               qtu(i,k) = qs + qlu
               qcko(i,k,1) = qs
               qcko(i,k,ntcw) = qlu
@@ -436,6 +441,7 @@ c  local variables and arrays
             else
               qcko(i,k,1) = qtu(i,k)
               qcko(i,k,ntcw) = 0.
+              qscl(i,k) = 1.
               tcko(i,k) = tlu
             endif
 !
@@ -499,6 +505,51 @@ c  local variables and arrays
 !
       endif
 !
+!
+!  split tags proportionally after updraft condensation
+!
+      if (nqvtagv > 0) then
+      do k = 2, kmpbl
+        do i = 1, im
+          if (cnvflg(i) .and. k <= kpbl(i)) then
+            dz   = zl(i,k) - zl(i,k-1)
+            tem  = 0.5 * xlamueq(i,k-1) * dz
+            factor = 1. + tem
+            tag_total = ((1.-tem)*(qcko(i,k-1,nqvtagv)
+     &                + qcko(i,k-1,nqvtagv+1)) + tem*
+     &                (q1(i,k-1,nqvtagv) + q1(i,k-1,nqvtagv+1)
+     &                + q1(i,k,nqvtagv) + q1(i,k,nqvtagv+1)))/factor
+            tag_total = tag_total * qscl(i,k)
+            qtu_total = qcko(i,k,1) + qcko(i,k,ntcw)
+            if (qtu_total > 0.) then
+              frac_vap = qcko(i,k,1) / qtu_total
+            else
+              frac_vap = 1.
+            endif
+            qcko(i,k,nqvtagv)   = tag_total * frac_vap
+            qcko(i,k,nqvtagv+1) = tag_total - qcko(i,k,nqvtagv)
+          endif
+        enddo
+      enddo
+      endif
+      
+      !  DEBUG: plume real vs tag (first 40 plume levels)
+      if (nqvtagv > 0 .and. ndbg < 40) then
+      do k = 2, kmpbl
+        do i = 1, im
+          if (cnvflg(i) .and. k <= kpbl(i)) then
+            dbg_r = qcko(i,k,1) + qcko(i,k,ntcw)
+            dbg_t = qcko(i,k,nqvtagv) + qcko(i,k,nqvtagv+1)
+            dbg_e = q1(i,k,1) + q1(i,k,ntcw)
+     &            - q1(i,k,nqvtagv) - q1(i,k,nqvtagv+1)
+            ndbg = ndbg + 1
+            print *, 'DBGU', k, dbg_e, dbg_r - dbg_t,
+     &        qcko(i,k,ntcw), qcko(i,k,nqvtagv+1)
+          endif
+        enddo
+      enddo
+      endif
+      
       return
       end
 !> @}

@@ -13,7 +13,7 @@
         clw, dclw, shcnvcw, rain1, npdf3d, num_p3d, ncnvcld3d, cnvc, cnvw, nsamftrac,    &
         rainc, cnvprcp, cnvw_phy_f3d, cnvc_phy_f3d,                      &
         dtend, dtidx, index_of_temperature, index_of_x_wind, index_of_y_wind,      &
-        index_of_process_scnv, ntqv, flag_for_scnv_generic_tend,                   &
+        index_of_process_scnv, ntqv, nqvtag, flag_for_scnv_generic_tend,                   &
         ntcw,ntiw,ntclamt,ntrw,ntsw,ntrnc,ntsnc,ntgl,ntgnc,ntsigma,                &
         imfshalcnv, imfshalcnv_sas, imfshalcnv_samf, ntrac,                        &
         cscnv, satmedmf, trans_trac, ras, errmsg, errflg)
@@ -23,6 +23,7 @@
       implicit none
 
       integer, intent(in) :: im, levs, ntqv, nsamftrac, tracers_total, tend_opt_scnv
+      integer, intent(in), optional :: nqvtag
       integer, intent(in) :: imp_physics, imp_physics_gfdl
       integer, intent(in) :: ntcw,ntiw,ntclamt,ntrw,ntsw,ntrnc,ntsnc,ntgl,ntgnc,ntsigma,ntrac
       logical, intent(in) :: lssav, ldiag3d, qdiag3d, flag_for_scnv_generic_tend
@@ -55,6 +56,9 @@
       integer,                       intent(out) :: errflg
 
       integer :: i, k, n, idtend, tracers
+      real(kind=kind_phys) :: old_qv_val, old_qv_tag_val
+      real(kind=kind_phys) :: old_ql_val, old_qi_val, old_qr_val, old_qs_val, old_qg_val
+      real(kind=kind_phys) :: old_ql_tag, old_qi_tag, old_qr_tag, old_qs_tag, old_qg_tag
       real(kind=kind_phys) :: tem
 
       real(kind=kind_phys), dimension(:,:), intent(in) :: ten_t, ten_u, ten_v
@@ -97,11 +101,48 @@
               gt0(i,k) = gt0(i,k) + delt*ten_t(i,k)
               gu0(i,k) = gu0(i,k) + delt*ten_u(i,k)
               gv0(i,k) = gv0(i,k) + delt*ten_v(i,k)
+             
+              old_qv_val = gq0(i,k,ntqv)
+!              if (present(nqvtag)) then
+!                old_qv_tag_val = gq0(i,k,nqvtag)
+!                old_ql_val = gq0(i,k,ntcw)
+!                old_qi_val = gq0(i,k,ntiw)
+!                old_qr_val = gq0(i,k,ntrw)
+!                old_qs_val = gq0(i,k,ntsw)
+!                old_qg_val = gq0(i,k,ntgl)
+!                old_ql_tag = gq0(i,k,nqvtag+1)
+!                old_qi_tag = gq0(i,k,nqvtag+2)
+!                old_qr_tag = gq0(i,k,nqvtag+3)
+!                old_qs_tag = gq0(i,k,nqvtag+4)
+!                old_qg_tag = gq0(i,k,nqvtag+5)
+!              end if              
+
               do n = 1, ntrac
                 gq0(i,k,n) = gq0(i,k,n) + delt*ten_q(i,k,n)
               end do
+!              if (present(nqvtag)) then
+!                if (old_qv_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag) = old_qv_tag_val * (gq0(i,k,ntqv) / old_qv_val)
+!                end if
+!                if (old_ql_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag+1) = old_ql_tag * (gq0(i,k,ntcw) / old_ql_val)
+!                end if
+!                if (old_qi_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag+2) = old_qi_tag * (gq0(i,k,ntiw) / old_qi_val)
+!                end if
+!                if (old_qr_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag+3) = old_qr_tag * (gq0(i,k,ntrw) / old_qr_val)
+!                end if
+!                if (old_qs_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag+4) = old_qs_tag * (gq0(i,k,ntsw) / old_qs_val)
+!                end if
+!                if (old_qg_val > 1.0e-9_kind_phys) then
+!                  gq0(i,k,nqvtag+5) = old_qg_tag * (gq0(i,k,ntgl) / old_qg_val)
+!                end if
+!              end if
             end do
           end do
+
         case (2) !add tendencies to sum
                   !Accumulated tendency = accumulated tendency + current tendency
                   !Current state unchanged

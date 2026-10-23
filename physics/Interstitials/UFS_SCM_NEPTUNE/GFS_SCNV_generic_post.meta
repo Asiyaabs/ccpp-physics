@@ -241,6 +241,14 @@
   dimensions = ()
   type = integer
   intent = in
+[nqvtag]
+  standard_name = index_of_tagged_water_vapor_in_tracer_concentration_array
+  long_name = tracer index for tagged water vapor
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+  optional = True
 [clw]
   standard_name = convective_transportable_tracers
   long_name = array to contain cloud water and other convective trans. tracers

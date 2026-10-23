@@ -148,6 +148,20 @@
   dimensions = ()
   type = integer
   intent = in
+[nqvtag]
+  standard_name = index_of_tagged_water_vapor_in_tracer_concentration_array
+  long_name = index of tagged water vapor in tracer concentration array
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+[nqvtagv]
+  standard_name = index_for_tagged_water_vapor_vertical_diffusion_tracer
+  long_name = index for tagged water vapor in the vertically diffused tracer array
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
 [nqrimef]
   standard_name = index_of_mass_weighted_rime_factor_in_tracer_concentration_array
   long_name = tracer index for mass weighted rime factor

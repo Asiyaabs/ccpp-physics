@@ -59,7 +59,7 @@
      &     ten_q, dot,ncloud,hpbl,ud_mf,dt_mf,cnvw,cnvc,                &
      &     clam,c0s,c1,evef,pgcon,asolfac,hwrf_samfshal,                & 
      &     sigmain,sigmaout,omegain,omegaout,betadcu,betamcu,betascu,   &
-     &     cat_adj_shal,errmsg,errflg)
+     &     cat_adj_shal,nqvtag,otsptflag,rn_tag,errmsg,errflg)
 !
       use machine , only : kind_phys
       use funcphys , only : fpvs
@@ -259,8 +259,25 @@ c  cloud water
      & ten_v(:,:), ten_q(:,:,:), dqtr(:,:,:)
 
       real(kind=kind_phys) :: new_t1(im,km),new_u1(im,km),new_v1(im,km),&
-     & new_q1(im,km), new_qtr(im,km,nn)
-
+     &     new_q1(im,km), new_qtr(im,km,nn)
+      
+!  qv_tag in-scheme tagging: tag counterparts of real water
+      integer, intent(in), optional :: nqvtag
+      logical, intent(in) :: otsptflag(:)
+      real(kind=kind_phys), intent(out), optional :: rn_tag(:)
+      integer tg_n, tg_j
+      integer, save :: tg_ndbg = 0
+!  phase-conversion hooks (fractionation factors, 1 for tagged water)
+      real(kind=kind_phys) tg_a_cond, tg_a_evap, tg_a_ice
+      real(kind=kind_phys) tg_gam, tg_den, tg_vap, tg_cnd, tg_rc,
+     &     tg_rr, tg_qev, tg_tem, tg_tem1
+      real(kind=kind_phys) tg_qv(im,km),    tg_qo(im,km),
+     &     tg_qcko(im,km),  tg_qrcko(im,km), tg_pwo(im,km),
+     &     tg_dellal(im,km),tg_dellaq(im,km),tg_newqv(im,km),
+     &     tg_dql(im,km),   tg_dqi(im,km),   tg_flx(im,0:km)
+      real(kind=kind_phys) tg_qlkt(im), tg_rn(im),
+     &     tg_sumn(im), tg_sump(im), tg_rtnp(im)
+      
       ten_t = 0._kind_phys
       ten_u = 0._kind_phys
       ten_v = 0._kind_phys
@@ -273,6 +290,43 @@ c  cloud water
       new_q1 = q1
       new_qtr = qtr
 
+!  qv_tag: locate tag slot in qtr (same order as interstitial_3)
+      tg_n = 0
+      tg_j = 0
+!  phase-conversion hooks: 1 for tagged water (isotopes later)
+      tg_a_cond = 1.0_kind_phys
+      tg_a_evap = 1.0_kind_phys
+      tg_a_ice  = 1.0_kind_phys
+      if (present(nqvtag)) tg_n = nqvtag
+      if (present(rn_tag)) rn_tag(:) = 0.
+      if (hwrf_samfshal) tg_n = 0
+      if (tg_n > 0) then
+        if (.not. otsptflag(tg_n)) then
+          tg_n = 0
+        else
+          tg_j = 2
+          do n = 2, tg_n
+            if (otsptflag(n)) tg_j = tg_j + 1
+          enddo
+        endif
+      endif
+      tg_qv     = 0.
+      tg_qo     = 0.
+      tg_qcko   = 0.
+      tg_qrcko  = 0.
+      tg_pwo    = 0.
+      tg_dellal = 0.
+      tg_dellaq = 0.
+      tg_dql    = 0.
+      tg_dqi    = 0.
+      tg_flx    = 0.
+      tg_qlkt   = 0.
+      tg_rn     = 0.
+      tg_sumn   = 0.
+      tg_sump   = 0.
+      tg_rtnp   = 1.
+      if (tg_n > 0) tg_qv(:,:) = qtr(:,:,tg_j)
+      tg_newqv = tg_qv
 c-----------------------------------------------------------------------
 !
 ! Initialize CCPP error handling variables
@@ -708,6 +762,20 @@ c
           endif
         enddo
       enddo
+!  qv_tag: environment tag consistent with qo (interface extrapolation)
+      if (tg_n > 0) then
+      do k = 1, km
+        do i = 1, im
+          if (cnvflg(i) .and. k <= kmax(i)-1) then
+            tg_tem = max(q1(i,k+1), 1.e-10_kind_phys)
+            tg_qo(i,k) = qo(i,k) * tg_qv(i,k+1) / tg_tem
+          elseif (cnvflg(i) .and. k == kmax(i)) then
+            tg_tem = max(q1(i,k), 1.e-10_kind_phys)
+            tg_qo(i,k) = qo(i,k) * tg_qv(i,k) / tg_tem
+          endif
+        enddo
+      enddo
+      endif      
 
       if (.not.hwrf_samfshal) then
        do n = 1, ntr
@@ -1317,6 +1385,8 @@ c
           aa1(i) = 0.
           qcko(i,kb(i)) = qo(i,kb(i))
           qrcko(i,kb(i)) = qo(i,kb(i))
+          tg_qcko(i,kb(i))  = tg_qo(i,kb(i))
+          tg_qrcko(i,kb(i)) = tg_qo(i,kb(i))
         endif
       enddo
 !> - Calculate the moisture content of the entraining/detraining parcel (qcko) and the value it would have if just saturated (qrch), according to equation A.14 in Grell (1993) \cite grell_1993 . Their difference is the amount of convective cloud water (qlk = rain + condensate). Determine the portion of convective cloud water that remains suspended and the portion that is converted into convective precipitation (pwo). Calculate and save the negative cloud work function (aa1) due to water loading. Above the level of minimum moist static energy, some of the cloud water is detrained into the grid-scale cloud water from every cloud layer with a rate of 0.0005 \f$m^{-1}\f$ (dellal).
@@ -1335,6 +1405,9 @@ cj
               qcko(i,k) = ((1.-tem)*qcko(i,k-1)+tem*
      &                     (qo(i,k)+qo(i,k-1)))/factor
               qrcko(i,k) = qcko(i,k)
+              tg_qcko(i,k) = ((1.-tem)*tg_qcko(i,k-1)+tem*
+     &                     (tg_qo(i,k)+tg_qo(i,k-1)))/factor
+              tg_qrcko(i,k) = tg_qcko(i,k)              
 cj
               dq = eta(i,k) * (qcko(i,k) - qrch)
 c
@@ -1357,6 +1430,19 @@ c
                 pwo(i,k) = etah * c0t(i,k) * dz * qlk
                 cnvwt(i,k) = etah * qlk * grav / dp
                 zdqca(i,k)=dq/eta(i,k)
+!  qv_tag: Eq 14 (Nusbaumer 2017) split of updraft total water;
+!     tg_a_cond = liquid condensation fractionation hook
+                tg_gam = 0.
+                if (abs(qrcko(i,k)) > 1.e-30) tg_gam = qrch/qrcko(i,k)
+                tg_den = 1.
+                if (tg_gam >= 0. .and. tg_gam < 1.)
+     &            tg_den = tg_a_cond * (1. - tg_gam) + tg_gam
+                tg_vap = tg_qrcko(i,k) * tg_gam / tg_den
+                tg_cnd = tg_qrcko(i,k) - tg_vap
+                tg_rc  = tg_cnd / (qrcko(i,k) - qrch)
+                tg_qcko(i,k)   = qlk * tg_rc + tg_vap
+                tg_pwo(i,k)    = pwo(i,k) * tg_rc
+                tg_dellal(i,k) = dellal(i,k) * tg_rc
               endif
 !
 !  compute buoyancy and drag for updraft velocity
@@ -1508,6 +1594,10 @@ cj
               qcko(i,k) = ((1.-tem)*qcko(i,k-1)+tem*
      &                     (qo(i,k)+qo(i,k-1)))/factor
               qrcko(i,k) = qcko(i,k)
+              tg_qcko(i,k) = ((1.-tem)*tg_qcko(i,k-1)+tem*
+     &                     (tg_qo(i,k)+tg_qo(i,k-1)))/factor
+              tg_qrcko(i,k) = tg_qcko(i,k)
+              
 cj
               dq = eta(i,k) * (qcko(i,k) - qrch)
 c
@@ -1527,6 +1617,19 @@ c
                 pwo(i,k) = etah * c0t(i,k) * dz * qlk
                 cnvwt(i,k) = etah * qlk * grav / dp
                 zdqca(i,k)=dq/eta(i,k)
+!  qv_tag: Eq 14 (Nusbaumer 2017) split of updraft total water;
+!  tg_a_cond = liquid condensation fractionation hook
+                tg_gam = 0.
+                if (abs(qrcko(i,k)) > 1.e-30) tg_gam = qrch/qrcko(i,k)
+                tg_den = 1.
+                if (tg_gam >= 0. .and. tg_gam < 1.)
+     &            tg_den = tg_a_cond * (1. - tg_gam) + tg_gam
+                tg_vap = tg_qrcko(i,k) * tg_gam / tg_den
+                tg_cnd = tg_qrcko(i,k) - tg_vap
+                tg_rc  = tg_cnd / (qrcko(i,k) - qrch)
+                tg_qcko(i,k)   = qlk * tg_rc + tg_vap
+                tg_pwo(i,k)    = pwo(i,k) * tg_rc
+                tg_dellal(i,k) = dellal(i,k) * tg_rc                
               endif
             endif
           endif
@@ -1712,6 +1815,15 @@ c
 c  check if there is excess moisture to release latent heat
 c
           if(dq > 0.) then
+!  qv_tag: cloud-top vapor/liquid split (Eq 14, tg_a_cond hook)
+             tg_gam = 0.
+             if (abs(qcko(i,k)) > 1.e-30) tg_gam = qrch/qcko(i,k)
+             tg_den = 1.
+             if (tg_gam >= 0. .and. tg_gam < 1.)
+     &            tg_den = tg_a_cond * (1. - tg_gam) + tg_gam
+            tg_vap = tg_qcko(i,k) * tg_gam / tg_den
+            tg_qlkt(i)   = tg_qcko(i,k) - tg_vap
+            tg_qcko(i,k) = tg_vap             
             qlko_ktcon(i) = dq
             qcko(i,k) = qrch
             zdqca(i,k) = dq
@@ -1811,6 +1923,8 @@ cj
               tem1 = -eta(i,k) * qrcko(i,k)
               tem2 = -eta(i,k-1) * qcko(i,k-1)
               dellaq(i,k) = dellaq(i,k) + (tem1-tem2) * factor
+              tg_dellaq(i,k) = tg_dellaq(i,k) + factor *
+     &             (eta(i,k-1)*tg_qcko(i,k-1) - eta(i,k)*tg_qrcko(i,k))
 cj
               tem1=eta(i,k)*(uo(i,k)-ucko(i,k))
               tem2=eta(i,k-1)*(uo(i,k-1)-ucko(i,k-1))
@@ -1858,6 +1972,8 @@ c
 c  cloud water
 c
           dellal(i,indx) = tem * qlko_ktcon(i)
+          tg_dellaq(i,indx) = tem * tg_qcko(i,indx-1)
+          tg_dellal(i,indx) = tem * tg_qlkt(i)
         endif
       enddo
       if (.not.hwrf_samfshal) then
@@ -1925,7 +2041,35 @@ c
           endif
         enddo
       enddo
-!
+!  qv_tag: TVD subsidence/uplift flux; limiter phkp from real q1
+      tg_flx = 0.
+      do k = 1, km1
+        do i = 1, im
+          if(cnvflg(i) .and.
+     &      (k >= kb(i) .and. k < ktcon(i))) then
+            if(eta(i,k) > 0.) then
+              rrkp = 0.
+              if(abs(q_diff(i,k)) > 1.e-22)
+     &               rrkp = q_diff(i,k+1) / q_diff(i,k)
+              phkp = (rrkp+abs(rrkp)) / (1.+abs(rrkp))
+              tg_tem1 = tg_qv(i,k+1) +
+     &                  phkp*(tg_qo(i,k)-tg_qv(i,k+1))
+              tg_flx(i,k) = eta(i,k) * tg_tem1
+            endif
+          endif
+        enddo
+      enddo
+      do k = 2, km1
+        do i = 1, im
+          if(cnvflg(i) .and.
+     &      (k > kb(i) .and. k <= ktcon(i))) then
+             dp = 1000. * del(i,k)
+             tg_dellaq(i,k) = tg_dellaq(i,k) +
+     &           (tg_flx(i,k) - tg_flx(i,k-1)) * grav/dp
+          endif
+        enddo
+      enddo
+!     
 !  for tracers including TKE & ozone
 !
       if (.not.hwrf_samfshal) then
@@ -2172,6 +2316,8 @@ c
               dellat = (dellah(i,k) - hvap * dellaq(i,k)) / cp
               new_t1(i,k) = t1(i,k) + dellat * xmb(i) * dt2
               new_q1(i,k) = q1(i,k) + dellaq(i,k) * xmb(i) * dt2
+              tg_newqv(i,k) = tg_qv(i,k)
+     &             + tg_dellaq(i,k) * xmb(i) * dt2
 !             tem = 1./rcs(i)
 !             u1(i,k) = u1(i,k) + dellau(i,k) * xmb(i) * dt2 * tem
 !             v1(i,k) = v1(i,k) + dellav(i,k) * xmb(i) * dt2 * tem
@@ -2238,7 +2384,56 @@ c
           endif
         enddo
       enddo
-!
+!  qv_tag: negative-moisture borrowing on the tag's own sums
+      if (tg_n > 0) then
+      do i = 1,im
+        tg_sumn(i) = 0.
+        tg_sump(i) = 0.
+        tg_rtnp(i) = 1.
+      enddo
+      do k = 1,km1
+        do i = 1,im
+          if (cnvflg(i)) then
+            if(k > kb(i) .and. k <= ktcon(i)) then
+              tg_tem = tg_newqv(i,k) * delp(i,k) / grav
+              if(tg_newqv(i,k) < 0.) tg_sumn(i) = tg_sumn(i)+tg_tem
+              if(tg_newqv(i,k) > 0.) tg_sump(i) = tg_sump(i)+tg_tem
+            endif
+          endif
+        enddo
+      enddo
+      do i = 1,im
+        if(cnvflg(i)) then
+          if(tg_sump(i) > 0. .and. tg_sumn(i) < 0.) then
+            if(tg_sump(i) > abs(tg_sumn(i))) then
+              tg_rtnp(i) = tg_sumn(i) / tg_sump(i)
+            else
+              tg_rtnp(i) = tg_sump(i) / tg_sumn(i)
+            endif
+          endif
+        endif
+      enddo
+      do k = 1,km1
+        do i = 1,im
+          if (cnvflg(i)) then
+            if(k > kb(i) .and. k <= ktcon(i)) then
+              if(tg_rtnp(i) < 0.) then
+                if(tg_sump(i) > abs(tg_sumn(i))) then
+                  if(tg_newqv(i,k) < 0.) tg_newqv(i,k) = 0.
+                  if(tg_newqv(i,k) > 0.) tg_newqv(i,k) =
+     &                         (1.+tg_rtnp(i))*tg_newqv(i,k)
+                else
+                  if(tg_newqv(i,k) < 0.) tg_newqv(i,k) =
+     &                         (1.+tg_rtnp(i))*tg_newqv(i,k)
+                  if(tg_newqv(i,k) > 0.) tg_newqv(i,k) = 0.
+                endif
+              endif
+            endif
+          endif
+        enddo
+      enddo
+      endif
+!     
       if (.not.hwrf_samfshal) then
 !
       indx = ntk - 2
@@ -2417,6 +2612,8 @@ c
             if(cnvflg(i)) then
               if(k < ktcon(i) .and. k > kb(i)) then
                 rn(i) = rn(i) + pwo(i,k) * xmb(i) * .001 * dt2
+                tg_rn(i) = tg_rn(i)
+     &               + tg_pwo(i,k) * xmb(i) * .001 * dt2 
               endif
             endif
             if(flg(i) .and. k < ktcon(i)) then
@@ -2438,6 +2635,7 @@ c
                 flg(i) = .false.
               endif
               if(rn(i) > 0. .and. qevap(i) > 0.) then
+                tg_rr = tg_rn(i) / rn(i)
                 tem  = .001 * factor
                 tem1 = qevap(i) * tem
                 if(tem1 > rn(i)) then
@@ -2445,7 +2643,13 @@ c
                   rn(i) = 0.
                 else
                   rn(i) = rn(i) - tem1
-                endif
+               endif
+!  qv_tag: rain evaporation (tg_a_evap hook; Stewart 1975 later)
+                tg_qev = min(qevap(i) * tg_rr * tg_a_evap,
+     &                       tg_rn(i) / tem)
+                tg_newqv(i,k) = tg_newqv(i,k) + tg_qev
+                tg_rn(i) = tg_rn(i) - tg_qev * tem
+               
                 new_q1(i,k) = new_q1(i,k) + qevap(i)
                 new_t1(i,k) = new_t1(i,k) - elocp * qevap(i)
                 deltv(i) = - elocp*qevap(i)/dt2
@@ -2480,7 +2684,10 @@ cj
 cj
       do i = 1, im
         if(cnvflg(i)) then
+!     qv_tag: mirror final rn reset (before rn changes), pass tagged shallow precip out
+          if(rn(i) < 0. .or. .not.flg(i)) tg_rn(i) = 0.
           if(rn(i) < 0. .or. .not.flg(i)) rn(i) = 0.
+          if (present(rn_tag)) rn_tag(i) = tg_rn(i)
           ktop(i) = ktcon(i)
           kbot(i) = kbcon(i)
           kcnv(i) = 2
@@ -2530,6 +2737,15 @@ c
             if (k >= kbcon(i) .and. k <= ktcon(i)) then
               tem  = dellal(i,k) * xmb(i) * dt2
               tem1 = max(0.0, min(1.0, (tcr-new_t1(i,k))*tcrf))
+!  qv_tag: detrained tag condensate split (tg_a_ice hook: ice
+!  formation; remainder stays liquid)
+              tg_tem = tg_dellal(i,k) * xmb(i) * dt2
+              if (new_qtr(i,k,2) > -999.0) then
+                tg_dqi(i,k) = tg_tem * tem1 * tg_a_ice
+                tg_dql(i,k) = tg_tem - tg_dqi(i,k)
+              else
+                tg_dqi(i,k) = tg_tem
+              endif              
               if (new_qtr(i,k,2) > -999.0) then
                 new_qtr(i,k,1) = new_qtr(i,k,1) + tem * tem1            ! ice
                 new_qtr(i,k,2) = new_qtr(i,k,2) + tem *(1.0-tem1)       ! water
@@ -2611,7 +2827,20 @@ c
       ten_v = (new_v1 - v1)/delt
       ten_q(:,:,1) = (new_q1 - q1)/delt
       dqtr  = (new_qtr - qtr)/delt
-
+!  qv_tag: in-scheme tag tendencies replace the generic tracer path
+      if (tg_n > 0) then
+        dqtr(:,:,tg_j)    = (tg_newqv - tg_qv) / delt
+        ten_q(:,:,tg_n+1) = tg_dql / delt
+        ten_q(:,:,tg_n+2) = tg_dqi / delt
+!  DEBUG DBGS (mode 2: all four ~0 if tags entered equal to real)
+        if (tg_ndbg < 20) then
+          tg_ndbg = tg_ndbg + 1
+          print *, 'DBGS', maxval(abs(tg_newqv - new_q1)),
+     &      maxval(abs(dqtr(:,:,tg_j) - ten_q(:,:,1))),
+     &      maxval(abs(ten_q(:,:,tg_n+1) - dqtr(:,:,2))),
+     &      maxval(abs(ten_q(:,:,tg_n+2) - dqtr(:,:,1)))
+        endif
+      endif
       return
       end subroutine samfshalcnv_run
 !> @}

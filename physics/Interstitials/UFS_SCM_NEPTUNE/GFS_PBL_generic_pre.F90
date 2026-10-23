@@ -9,14 +9,14 @@
 !! \section arg_table_GFS_PBL_generic_pre_run Argument Table
 !! \htmlinclude GFS_PBL_generic_pre_run.html
 !!
-      subroutine GFS_PBL_generic_pre_run (im, levs, nvdiff, ntrac, rtg_ozone_index,      &
-        ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc,                 &
-        ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqrimef, trans_aero, ntchs, ntchm,          &
-        ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz,                                &
-        imp_physics, imp_physics_gfdl, imp_physics_thompson, imp_physics_wsm6,           &
-        imp_physics_mg, imp_physics_fer_hires, imp_physics_nssl,                         &
-        ltaerosol, mraerosol, nssl_ccn_on, nssl_hail_on, nssl_3moment,                   &
-        hybedmf, do_shoc, satmedmf, qgrs, vdftra,                                        &
+      subroutine GFS_PBL_generic_pre_run (im, levs, nvdiff, ntrac, rtg_ozone_index,              &
+        ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc,                         &
+        ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqvtag, nqvtagv, nqrimef, trans_aero, ntchs, ntchm, &
+        ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz,                                        &
+        imp_physics, imp_physics_gfdl, imp_physics_thompson, imp_physics_wsm6,                   &
+        imp_physics_mg, imp_physics_fer_hires, imp_physics_nssl,                                 &
+        ltaerosol, mraerosol, nssl_ccn_on, nssl_hail_on, nssl_3moment,                           &
+        hybedmf, do_shoc, satmedmf, qgrs, vdftra,                                                &
         ugrs, vgrs, tgrs, errmsg, errflg)
         
       use machine,                only : kind_phys
@@ -28,7 +28,7 @@
       integer, intent(out) :: rtg_ozone_index
       integer, intent(in) :: im, levs, nvdiff, ntrac
       integer, intent(in) :: ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc
-      integer, intent(in) :: ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqrimef,ntchs, ntchm
+      integer, intent(in) :: ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqvtag, nqvtagv, nqrimef,ntchs, ntchm
       integer, intent(in) :: ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz
       logical, intent(in) :: trans_aero
       integer, intent(in) :: imp_physics, imp_physics_gfdl, imp_physics_thompson, imp_physics_wsm6
@@ -287,6 +287,16 @@
           enddo
         endif
 !
+        if (nqvtag>0 .and. nqvtagv>0) then
+          do n=0,5
+            do k=1,levs
+              do i=1,im
+                vdftra(i,k,nqvtagv+n) = qgrs(i,k,nqvtag+n)
+              enddo
+            enddo
+          enddo
+        endif
+!        
       endif
 
     end subroutine GFS_PBL_generic_pre_run

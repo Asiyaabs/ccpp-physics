@@ -72,6 +72,21 @@
   dimensions = ()
   type = integer
   intent = in
+[ntqv]
+  standard_name = index_of_specific_humidity_in_tracer_concentration_array
+  long_name = tracer index for water vapor (specific humidity)
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+[nqvtag]
+  standard_name = index_of_tagged_water_vapor_in_tracer_concentration_array
+  long_name = tracer index for tagged water vapor
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+  optional = True
 [imp_physics]
   standard_name = control_for_microphysics_scheme
   long_name = choice of microphysics scheme
@@ -1027,6 +1042,114 @@
   dimensions = (horizontal_loop_extent)
   type = integer
   intent = in
+[raincd_tag]
+  standard_name = lwe_thickness_of_deep_convective_precipitation_amount_of_tagged_water
+  long_name = tagged deep convective precipitation amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = in
+  optional = True
+[raincs_tag]
+  standard_name = lwe_thickness_of_shallow_convective_precipitation_amount_of_tagged_water
+  long_name = tagged shallow convective precipitation amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = in
+  optional = True
+[rainmp_tag]
+  standard_name = lwe_thickness_of_explicit_rain_amount_of_tagged_water
+  long_name = tagged explicit rain amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = in
+  optional = True
+[snowmp_tag]
+  standard_name = lwe_thickness_of_explicit_frozen_precipitation_amount_of_tagged_water
+  long_name = tagged explicit snow plus graupel plus ice amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = in
+  optional = True
+[precc]
+  standard_name = lwe_thickness_of_convective_precipitation_amount_cesm_diag
+  long_name = convective precipitation (rain plus snow) on dynamics timestep, CESM PRECC
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precsc]
+  standard_name = lwe_thickness_of_convective_snow_amount_cesm_diag
+  long_name = convective snow on dynamics timestep, CESM PRECSC
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precl]
+  standard_name = lwe_thickness_of_large_scale_precipitation_amount_cesm_diag
+  long_name = large-scale (microphysics) precipitation, all phases, on dynamics timestep, CESM PRECL
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precsl]
+  standard_name = lwe_thickness_of_large_scale_snow_amount_cesm_diag
+  long_name = large-scale snow plus graupel plus ice on dynamics timestep, CESM PRECSL
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precrc_tag]
+  standard_name = lwe_thickness_of_convective_rain_amount_of_tagged_water
+  long_name = tagged convective rain on dynamics timestep, iCESM PRECRC
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precsc_tag]
+  standard_name = lwe_thickness_of_convective_snow_amount_of_tagged_water
+  long_name = tagged convective snow on dynamics timestep, iCESM PRECSC
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precrl_tag]
+  standard_name = lwe_thickness_of_large_scale_rain_amount_of_tagged_water
+  long_name = tagged large-scale rain on dynamics timestep, iCESM PRECRL
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
+[precsl_tag]
+  standard_name = lwe_thickness_of_large_scale_snow_amount_of_tagged_water
+  long_name = tagged large-scale snow plus graupel plus ice on dynamics timestep, iCESM PRECSL
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True 
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

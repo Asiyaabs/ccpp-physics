@@ -47,7 +47,7 @@ contains
 ! #########################################################################################
   subroutine GFS_photochemistry_run (dtp, ntqv, ntoz, im, levs, ozphys, oz_phys_2015, oz_phys_2006, con_1ovg,   &
        prsl, dp, ozpl, h2o_phys, h2ophys, h2opl, gq0, gt0, ten_q, ten_u, ten_v, ten_t, do3_dt_prd, do3_dt_ozmx, &
-       do3_dt_temp, do3_dt_ohoz, dqv_dt_prd, dqv_dt_qvmx, errmsg, errflg)
+       do3_dt_temp, do3_dt_ohoz, dqv_dt_prd, dqv_dt_qvmx, nqvtag, errmsg, errflg)    
     
     ! Inputs
     real(kind=kind_phys), intent(in) :: &
@@ -58,6 +58,7 @@ contains
          ntoz,           &! index for ozone in the the tracer array
          im,             &! horizontal loop extent
          levs            ! vertical dimension
+    integer, intent(in), optional :: nqvtag   ! index of tagged water vapor
     real(kind=kind_phys), intent(in), dimension(:,:) :: &
          prsl,         & ! Air pressure (Pa)
          dp,           & ! Pressure thickness (Pa)
@@ -100,6 +101,10 @@ contains
     real(kind=kind_phys), dimension(im,levs) :: &
          init_oz0,  oz0,          & ! initial and updated local ozone concentration
          init_h2o0, h2o0            ! initial and updated local h2o concentration
+    real(kind=kind_phys), dimension(im,levs) :: tag0   ! updated local qv_tag
+    logical :: ltag
+    integer, save :: ndbgph = 0
+    integer :: kd
     
     ! Initialize CCPP error handling variables
     errmsg = ''
@@ -134,12 +139,34 @@ contains
     if (h2o_phys) then
        init_h2o0 = gq0(:,:,ntqv)
        h2o0 = init_h2o0
-       call h2ophys%run(dtp, prsl, h2opl, h2o0, dqv_dt_prd, dqv_dt_qvmx)
+!       call h2ophys%run(dtp, prsl, h2opl, h2o0, dqv_dt_prd, dqv_dt_qvmx)
+       ltag = .false.
+       if (present(nqvtag)) then
+          if (nqvtag > 0) ltag = .true.
+       endif
+       if (ltag) then
+          tag0 = gq0(:,:,nqvtag)
+          call h2ophys%run(dtp, prsl, h2opl, h2o0, dqv_dt_prd, dqv_dt_qvmx, h2otag=tag0)
+       else
+          call h2ophys%run(dtp, prsl, h2opl, h2o0, dqv_dt_prd, dqv_dt_qvmx)
+       endif
        do i=1, im
          do k=1, levs
-           ten_q(i,k,ntqv) = (h2o0(i,k) - init_h2o0(i,k))/dtp
+            ten_q(i,k,ntqv) = (h2o0(i,k) - init_h2o0(i,k))/dtp
+            if (ltag) ten_q(i,k,nqvtag) = (tag0(i,k) - gq0(i,k,nqvtag))/dtp
          end do
        end do
+!  DEBUG PHDBG: tag vs real photochemistry at ~1 hPa, first 5 calls
+       if (ndbgph < 5) then
+          ndbgph = ndbgph + 1
+          kd = minloc(abs(prsl(1,:) - 100.0_kind_phys), 1)
+          if (ltag) then
+             print '(a,i4,4es16.8)', 'PHDBG', kd, init_h2o0(1,kd), &
+                  gq0(1,kd,nqvtag), ten_q(1,kd,ntqv), ten_q(1,kd,nqvtag)
+          else
+             print *, 'PHDBG ltag is FALSE'
+          endif
+       endif      
     endif
 
   end subroutine GFS_photochemistry_run

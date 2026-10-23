@@ -1,4 +1,5 @@
 !> \file GFS_PBL_generic_post.F90
+
 !!  Contains code related to PBL schemes to be called after PBL schemes within GFS-based physics suites.
 
     module GFS_PBL_generic_post
@@ -10,7 +11,7 @@
 !!
       subroutine GFS_PBL_generic_post_run (im, levs, nvdiff, ntrac,                                                            &
         ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc, ntwa, ntia, ntgl, ntoz, ntke, ntkev,nqrimef,          &
-        tend_opt_pbl, trans_aero, ntchs, ntchm, ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz,                              &
+        tend_opt_pbl, trans_aero, ntchs, ntchm, ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz, nqvtag, nqvtagv,             &
         imp_physics, imp_physics_gfdl, imp_physics_thompson, imp_physics_wsm6, imp_physics_mg,                                 &
         imp_physics_fer_hires, imp_physics_nssl, nssl_ccn_on, ltaerosol, mraerosol, nssl_hail_on, nssl_3moment,                &
         cplflx, cplaqm, cplchm, lssav, flag_for_pbl_generic_tend, ldiag3d, lsidea, hybedmf, do_shoc, satmedmf,                 &
@@ -31,7 +32,7 @@
 
       integer, parameter  :: kp = kind_phys
       integer, intent(in) :: im, levs, nvdiff, ntrac, ntchs, ntchm, kdt
-      integer, intent(in) :: ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc, ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqrimef
+      integer, intent(in) :: ntqv, ntcw, ntiw, ntrw, ntsw, ntlnc, ntinc, ntrnc, ntsnc, ntgnc, ntwa, ntia, ntgl, ntoz, ntke, ntkev, nqvtag, nqvtagv, nqrimef
       integer, intent(in) :: ntccn, nthl, nthnc, ntgv, nthv, ntrz, ntgz, nthz
       integer, intent(in) :: tend_opt_pbl
       logical, intent(in) :: trans_aero
@@ -91,6 +92,8 @@
       real(kind=kind_phys), parameter :: qmin  = 1.0e-8_kp
       integer :: i, k, kk, k1, n
       real(kind=kind_phys) :: tem, rho
+!      real(kind=kind_phys) :: alpha_frac = 1.0_kind_phys  ! fractionation factor (1.0 = no fractionation; replace with real values for isotopes)
+      
       integer :: idtend
       
       ! Initialize CCPP error handling variables
@@ -110,8 +113,21 @@
               ten_q(i,k,ntke)  = dvdftra(i,k,ntkev)
             enddo
           enddo
-        endif
+       endif
 !
+!
+        if (nqvtag>0 .and. nqvtagv>0) then
+          do n=0,5
+            do k=1,levs
+              do i=1,im
+                ten_q(i,k,nqvtag+n) = dvdftra(i,k,nqvtagv+n)
+              enddo
+            enddo
+          enddo
+
+       endif
+       
+!       
         if (trans_aero) then
           ! Set kk if chemistry-aerosol tracers are diffused
           call set_aerosol_tracer_index(imp_physics, imp_physics_wsm6,          &
@@ -322,8 +338,23 @@
 
       endif ! nvdiff == ntrac
 
-      
-
+!
+!  Scale tag tendencies by tag fraction (alpha=1.0, no fractionation in PBL)
+!  When isotopes are added, replace alpha with real fractionation factors
+!  at code points where phase changes occur
+!
+!      if (nqvtag>0 .and. nqvtagv>0) then
+!        do k=1,levs
+!          do i=1,im
+!            if (gq0(i,k,nqvtag) > 1.0e-9_kind_phys .and. &
+!                gq0(i,k,ntqv) > 1.0e-9_kind_phys) then
+!              ten_q(i,k,nqvtag)   = ten_q(i,k,ntqv) * &
+!                  (gq0(i,k,nqvtag) / gq0(i,k,ntqv)) * alpha_frac
+!            end if
+!          enddo
+!        enddo
+!     endif
+     
       case_PBL_ten: select case (tend_opt_pbl)
         case (1) !immediately apply tendencies
                   !Current state = current state + dt*current tendency
@@ -337,7 +368,7 @@
                 gq0(i,k,n) = gq0(i,k,n) + dtp*ten_q(i,k,n)
               end do
             end do
-          end do
+          end do         
         case (2) !add tendencies to sum
                   !Accumulated tendency = accumulated tendency + current tendency
                   !Current state unchanged

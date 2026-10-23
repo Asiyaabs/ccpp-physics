@@ -606,6 +606,30 @@
   type = real
   kind = kind_phys
   intent = in
+[nqvtag]
+  standard_name = index_of_tagged_water_vapor_in_tracer_concentration_array
+  long_name = tracer index for tagged water vapor
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+  optional = True
+[otsptflag]
+  standard_name = flag_convective_tracer_transport_interstitial
+  long_name = flag for interstitial tracer transport
+  units = flag
+  dimensions = (number_of_tracers)
+  type = logical
+  intent = in
+[rn_tag]
+  standard_name = lwe_thickness_of_shallow_convective_precipitation_amount_of_tagged_water
+  long_name = tagged shallow convective precipitation amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = out
+  optional = True
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

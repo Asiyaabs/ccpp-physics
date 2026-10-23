@@ -13,6 +13,7 @@
   ltaerosol            = .false.
   lradar               = .true.
   ttendlim             = -999
+  tagging              = .true.
   dt_inner             = 150
   sedi_semi            = .true.
   decfl                = 10

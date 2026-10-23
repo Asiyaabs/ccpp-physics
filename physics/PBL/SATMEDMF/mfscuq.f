@@ -11,7 +11,7 @@
 !! for stratocumulus-top-driven turbulence.
 !! \section mfscuq GFS mfscu General Algorithm
 !> @{
-      subroutine mfscuq(im,ix,km,kmscu,ntcw,ntrac1,delt,
+      subroutine mfscuq(im,ix,km,kmscu,ntcw,ntrac1,delt, nqvtagv,
      &   cnvflg,zl,zm,q1,t1,u1,v1,plyr,pix,
      &   thlx,thvx,thlvx,gdx,thetae,
      &   krad,mrad,radmin,buo,wush,tkemean,vez0fun,xmfd,
@@ -26,7 +26,8 @@
 !
       implicit none
 !
-      integer            im, ix,  km, kmscu, ntcw, ntrac1
+      integer            im, ix,  km, kmscu, ntcw, ntrac1, nqvtagv
+      real(kind=kind_phys) qscd(im,km)
 !    &,                  me
       integer   krad(im), mrad(im)
 !
@@ -73,6 +74,9 @@
      &                     xlamdem(im,km-1), ra1(im)
       real(kind=kind_phys) delz(im), xlamax(im), ce0t(im)
 !
+      real(kind=kind_phys) qtu_total, tag_total, frac_vap
+      real(kind=kind_phys) dbg_r, dbg_t, dbg_e
+      integer, save :: ndbg = 0
       real(kind=kind_phys) xlamavg(im),   sigma(im),
      &                     scaldfunc(im), sumx(im)
 !
@@ -503,6 +507,7 @@ c
             if (dq > 0.) then
               gamma = el2orc * qs / (tld**2)
               qld = dq / (1. + gamma)
+              qscd(i,k) = (qs + qld) / qtd(i,k)
               qtd(i,k) = qs + qld
               qcdo(i,k,1) = qs
               qcdo(i,k,ntcw) = qld
@@ -510,6 +515,7 @@ c
             else
               qcdo(i,k,1) = qtd(i,k)
               qcdo(i,k,ntcw) = 0.
+              qscd(i,k) = 1.
               tcdo(i,k) = tld
             endif
 !
@@ -580,6 +586,54 @@ c
 !
       endif
 !
+!
+!  split tags proportionally after downdraft condensation
+!
+      if (nqvtagv > 0) then
+      do k = kmscu, 1, -1
+        do i = 1, im
+          if (cnvflg(i) .and. k < krad(i)) then
+            if(k >= mrad(i)) then
+              dz = zl(i,k+1) - zl(i,k)
+              tem  = 0.5 * xlamdeq(i,k) * dz
+              factor = 1. + tem
+              tag_total = ((1.-tem)*(qcdo(i,k+1,nqvtagv)
+     &                  + qcdo(i,k+1,nqvtagv+1)) + tem*
+     &                  (q1(i,k,nqvtagv) + q1(i,k,nqvtagv+1)
+     &                  + q1(i,k+1,nqvtagv) + q1(i,k+1,nqvtagv+1)))
+     &                  / factor
+              tag_total = tag_total * qscd(i,k)
+              qtu_total = qcdo(i,k,1) + qcdo(i,k,ntcw)
+              if (qtu_total > 0.) then
+                frac_vap = qcdo(i,k,1) / qtu_total
+              else
+                frac_vap = 1.
+              endif
+              qcdo(i,k,nqvtagv)   = tag_total * frac_vap
+              qcdo(i,k,nqvtagv+1) = tag_total - qcdo(i,k,nqvtagv)
+            endif
+          endif
+        enddo
+      enddo
+      endif
+      
+      !  DEBUG: downdraft real vs tag (first 40 plume levels)
+      if (nqvtagv > 0 .and. ndbg < 40) then
+      do k = kmscu, 1, -1
+        do i = 1, im
+          if (cnvflg(i) .and. k < krad(i) .and. k >= mrad(i)) then
+            dbg_r = qcdo(i,k,1) + qcdo(i,k,ntcw)
+            dbg_t = qcdo(i,k,nqvtagv) + qcdo(i,k,nqvtagv+1)
+            dbg_e = q1(i,k,1) + q1(i,k,ntcw)
+     &            - q1(i,k,nqvtagv) - q1(i,k,nqvtagv+1)
+            ndbg = ndbg + 1
+            print *, 'DBGD', k, dbg_e, dbg_r - dbg_t,
+     &        qcdo(i,k,ntcw), qcdo(i,k,nqvtagv+1)
+          endif
+        enddo
+      enddo
+      endif
+      
       return
       end
 !> @}

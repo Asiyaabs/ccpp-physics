@@ -86,8 +86,7 @@
      &    do_ca, ca_closure, ca_entr, ca_trigger, nthresh,ca_deep,      &
      &    rainevap,sigmain,sigmaout,omegain,omegaout,betadcu,betamcu,   &
      &    betascu,maxMF,do_mynnedmf,sigmab_coldstart,cat_adj_deep,      &
-     &    errmsg,errflg)
-
+     &    nqvtag,otsptflag,rn_tag,errmsg,errflg)
 !
       use machine , only : kind_phys
       use funcphys , only : fpvs
@@ -316,7 +315,25 @@ c    &            .743,.813,.886,.947,1.138,1.377,1.896/
 
       real(kind=kind_phys) :: new_t1(im,km),new_u1(im,km),new_v1(im,km),&
      & new_q1(im,km),new_qtr(im,km,nn)
-
+      integer, intent(in), optional :: nqvtag
+      logical, intent(in) :: otsptflag(:)
+      real(kind=kind_phys), intent(out), optional :: rn_tag(:)
+      
+!  qv_tag in-scheme tagging: tag counterparts of real water
+      integer tg_n, tg_j
+      integer, save :: tg_ndbg = 0
+      integer, save :: tg_ndbge = 0
+      real(kind=kind_phys) tg_alpha, tg_gam, tg_den, tg_vap, tg_cnd,
+     &     tg_rc, tg_rr, tg_rain, tg_qev, tg_tem, tg_tem1
+      real(kind=kind_phys) tg_qv(im,km),    tg_qo(im,km),
+     &     tg_qcko(im,km),  tg_qrcko(im,km), tg_qcdo(im,km),
+     &     tg_qrcdo(im,km), tg_pwo(im,km),   tg_pwdo(im,km),
+     &     tg_dellal(im,km),tg_dellaq(im,km),tg_newqv(im,km),
+     &     tg_dql(im,km),   tg_dqi(im,km),   tg_flx(im,0:km)
+      real(kind=kind_phys) tg_qlkt(im), tg_pwav(im), tg_rn(im)
+      real(kind=kind_phys) tg_sumn(im), tg_sump(im), tg_rtnp(im)      
+      
+      
       ten_t = 0._kind_phys
       ten_u = 0._kind_phys
       ten_v = 0._kind_phys
@@ -328,6 +345,44 @@ c    &            .743,.813,.886,.947,1.138,1.377,1.896/
       new_v1 = v1
       new_q1 = q1
       new_qtr = qtr
+
+!  qv_tag: locate tag slot in qtr (same order as interstitial_3)
+      tg_n = 0
+      tg_j = 0
+!  fractionation factor at condensation: 1 for tagged water
+      tg_alpha = 1.0
+      if (present(nqvtag)) tg_n = nqvtag
+      if (present(rn_tag)) rn_tag(:) = 0.
+      if (hwrf_samfdeep) tg_n = 0
+      if (tg_n > 0) then
+        if (.not. otsptflag(tg_n)) then
+          tg_n = 0
+        else
+          tg_j = 2
+          do n = 2, tg_n
+            if (otsptflag(n)) tg_j = tg_j + 1
+          enddo
+        endif
+      endif
+      tg_qv     = 0.
+      tg_qo     = 0.
+      tg_qcko   = 0.
+      tg_qrcko  = 0.
+      tg_qcdo   = 0.
+      tg_qrcdo  = 0.
+      tg_pwo    = 0.
+      tg_pwdo   = 0.
+      tg_dellal = 0.
+      tg_dellaq = 0.
+      tg_dql    = 0.
+      tg_dqi    = 0.
+      tg_flx    = 0.
+      tg_qlkt   = 0.
+      tg_pwav   = 0.
+      tg_rn     = 0.
+      if (tg_n > 0) tg_qv(:,:) = qtr(:,:,tg_j)
+      tg_newqv = tg_qv
+      
 
       ! Initialize CCPP error handling variables
       errmsg = ''
@@ -772,6 +827,22 @@ c
           endif
         enddo
       enddo
+
+!  qv_tag: environment tag consistent with qo (interface extrapolation)
+      if (tg_n > 0) then
+      do k = 1, km
+        do i = 1, im
+          if (k <= kmax(i)-1) then
+            tg_tem = max(q1(i,k+1), 1.e-10_kind_phys)
+            tg_qo(i,k) = qo(i,k) * tg_qv(i,k+1) / tg_tem
+          elseif (k == kmax(i)) then
+            tg_tem = max(q1(i,k), 1.e-10_kind_phys)
+            tg_qo(i,k) = qo(i,k) * tg_qv(i,k) / tg_tem
+          endif
+        enddo
+      enddo
+      endif
+      
       if (.not.hwrf_samfdeep) then
       do n = 1, ntr
       do k = 1, km1
@@ -1564,6 +1635,8 @@ c
 !         aa1(i) = 0.
           qcko(i,kb(i)) = qo(i,kb(i))
           qrcko(i,kb(i)) = qo(i,kb(i))
+          tg_qcko(i,kb(i))  = tg_qo(i,kb(i))
+          tg_qrcko(i,kb(i)) = tg_qo(i,kb(i))
 !         rhbar(i) = 0.
         endif
       enddo
@@ -1583,6 +1656,10 @@ cj
               qcko(i,k) = ((1.-tem)*qcko(i,k-1)+tem*
      &                     (qo(i,k)+qo(i,k-1)))/factor
               qrcko(i,k) = qcko(i,k)
+              tg_qcko(i,k) = ((1.-tem)*tg_qcko(i,k-1)+tem*
+     &                     (tg_qo(i,k)+tg_qo(i,k-1)))/factor
+              tg_qrcko(i,k) = tg_qcko(i,k)
+
 cj
               dq = eta(i,k) * (qcko(i,k) - qrch)
 c
@@ -1606,7 +1683,21 @@ c
                 qcko(i,k) = qlk + qrch
                 pwo(i,k) = etah * c0t(i,k) * dz * qlk
                 pwavo(i) = pwavo(i) + pwo(i,k)
-!               cnvwt(i,k) = (etah*qlk + pwo(i,k)) * grav / dp
+!  qv_tag: Eq 14 (Nusbaumer 2017) split of updraft total water
+                tg_gam = 0.
+                if (abs(qrcko(i,k)) > 1.e-30) tg_gam = qrch/qrcko(i,k)
+                tg_den = 1.
+                if (tg_gam >= 0. .and. tg_gam < 1.)
+     &            tg_den = tg_alpha * (1. - tg_gam) + tg_gam
+                tg_vap = tg_qrcko(i,k) * tg_gam / tg_den
+                tg_cnd = tg_qrcko(i,k) - tg_vap
+                tg_rc  = tg_cnd / (qrcko(i,k) - qrch)
+                tg_qcko(i,k)   = qlk * tg_rc + tg_vap
+                tg_pwo(i,k)    = pwo(i,k) * tg_rc
+                tg_dellal(i,k) = dellal(i,k) * tg_rc
+                tg_pwav(i)     = tg_pwav(i) + tg_pwo(i,k)
+                
+!     cnvwt(i,k) = (etah*qlk + pwo(i,k)) * grav / dp
                 cnvwt(i,k) = etah * qlk * grav / dp
                 zdqca(i,k)=dq/eta(i,k)
               endif
@@ -1768,6 +1859,9 @@ cj
               qcko(i,k) = ((1.-tem)*qcko(i,k-1)+tem*
      &                     (qo(i,k)+qo(i,k-1)))/factor
               qrcko(i,k) = qcko(i,k)
+              tg_qcko(i,k) = ((1.-tem)*tg_qcko(i,k-1)+tem*
+     &             (tg_qo(i,k)+tg_qo(i,k-1)))/factor
+              tg_qrcko(i,k) = tg_qcko(i,k)
 cj
               dq = eta(i,k) * (qcko(i,k) - qrch)
 c
@@ -1786,6 +1880,19 @@ c
                 qcko(i,k) = qlk + qrch
                 pwo(i,k) = etah * c0t(i,k) * dz * qlk
                 pwavo(i) = pwavo(i) + pwo(i,k)
+!  qv_tag: Eq 14 (Nusbaumer 2017) split of updraft total water
+                tg_gam = 0.
+                if (abs(qrcko(i,k)) > 1.e-30) tg_gam = qrch/qrcko(i,k)
+                tg_den = 1.
+                if (tg_gam >= 0. .and. tg_gam < 1.)
+     &            tg_den = tg_alpha * (1. - tg_gam) + tg_gam
+                tg_vap = tg_qrcko(i,k) * tg_gam / tg_den
+                tg_cnd = tg_qrcko(i,k) - tg_vap
+                tg_rc  = tg_cnd / (qrcko(i,k) - qrch)
+                tg_qcko(i,k)   = qlk * tg_rc + tg_vap
+                tg_pwo(i,k)    = pwo(i,k) * tg_rc
+                tg_dellal(i,k) = dellal(i,k) * tg_rc
+                tg_pwav(i)     = tg_pwav(i) + tg_pwo(i,k)
 !               cnvwt(i,k) = (etah*qlk + pwo(i,k)) * grav / dp
                 cnvwt(i,k) = etah * qlk * grav / dp
                 zdqca(i,k)=dq/eta(i,k)
@@ -1977,7 +2084,24 @@ c
 c  check if there is excess moisture to release latent heat
 c
           if(dq > 0.) then
+            tg_gam = 0.
+            if (abs(qcko(i,k)) > 1.e-30) tg_gam = qrch / qcko(i,k)
+            tg_den = 1.
+            if (tg_gam >= 0. .and. tg_gam < 1.)
+     &        tg_den = tg_alpha * (1. - tg_gam) + tg_gam
+            tg_vap = tg_qcko(i,k) * tg_gam / tg_den
+            tg_qlkt(i)   = tg_qcko(i,k) - tg_vap
+!  DEBUG DBGT: split inputs/outputs at cloud top (remove later)
+            if (abs(tg_qlkt(i) - dq) > 1.e-13
+     &          .and. tg_ndbge < 60) then
+              print *, 'DBGT k',k,' qcko',qcko(i,k),
+     &          ' tgqcko',tg_qcko(i,k),' qrch',qrch
+              print *, 'DBGT gam',tg_gam,' den',tg_den,
+     &          ' vap',tg_vap,' dq',dq,' tgqlkt',tg_qlkt(i)
+            endif
+            tg_qcko(i,k) = tg_vap
             qlko_ktcon(i) = dq
+             
             qcko(i,k) = qrch
             zdqca(i,k) = dq
           endif
@@ -2091,6 +2215,8 @@ c
           hcdo(i,jmn) = heo(i,jmn)
           qcdo(i,jmn) = qo(i,jmn)
           qrcdo(i,jmn)= qo(i,jmn)
+          tg_qcdo(i,jmn)  = tg_qo(i,jmn)
+          tg_qrcdo(i,jmn) = tg_qo(i,jmn)
           ucdo(i,jmn) = uo(i,jmn)
           vcdo(i,jmn) = vo(i,jmn)
           pwevo(i) = 0.
@@ -2176,6 +2302,27 @@ cj
 cj
               pwdo(i,k)  = etad(i,k) * (qcdo(i,k) - qrcdo(i,k))
               pwevo(i)   = pwevo(i) + pwdo(i,k)
+!  qv_tag: downdraft mixing; rain evaporation (no fractionation,
+!  Kurita et al. 2011) or condensation (Eq 14 hook)
+              tg_qcdo(i,k) = ((1.-tem)*tg_qrcdo(i,k+1)+tem*
+     &             (tg_qo(i,k)+tg_qo(i,k+1)))/factor
+              if (qrcdo(i,k) >= qcdo(i,k)) then
+                 tg_rr = 0.
+                 if (pwavo(i) > 0.) tg_rr = tg_pwav(i) / pwavo(i)
+                 tg_qrcdo(i,k) = tg_qcdo(i,k)
+     &                + (qrcdo(i,k) - qcdo(i,k)) * tg_rr
+              else
+                 tg_gam = 0.
+                 if (abs(qcdo(i,k)) > 1.e-30)
+     &                tg_gam = qrcdo(i,k) / qcdo(i,k)
+                 tg_den = 1.
+                 if (tg_gam >= 0. .and. tg_gam < 1.)
+     &                tg_den = tg_alpha * (1. - tg_gam) + tg_gam 
+                 tg_qrcdo(i,k) = tg_qcdo(i,k) * tg_gam / tg_den
+              endif
+              tg_pwdo(i,k) = etad(i,k)
+     &             * (tg_qcdo(i,k) - tg_qrcdo(i,k))
+              
           endif
         enddo
       enddo
@@ -2477,6 +2624,91 @@ c
           endif
         enddo
       enddo
+!  qv_tag: tag counterpart of dellaq; TVD limiter phkp from real q1
+      do i = 1, im
+        if (cnvflg(i)) then
+          dp = 1000. * del(i,1)
+          tg_tem = edto(i) * etad(i,1) * grav / dp
+          tg_dellaq(i,1) = tg_tem * tg_qrcdo(i,1)
+        endif
+      enddo
+      do k = 2, km1
+        do i = 1, im
+          if (cnvflg(i) .and. k < ktcon(i)) then
+            aup = 1.
+            if(k <= kb(i)) aup = 0.
+            adw = 1.
+            if(k > jmin(i)) adw = 0.
+            dp = 1000. * del(i,k)
+            tem1  = -eta(i,k) * tg_qrcko(i,k)
+            tem2  = -eta(i,k-1) * tg_qcko(i,k-1)
+            ptem1 = -etad(i,k) * tg_qrcdo(i,k)
+            ptem2 = -etad(i,k-1) * tg_qcdo(i,k-1)
+            tg_dellaq(i,k) = tg_dellaq(i,k) +
+     &        (aup*(tem1-tem2)-adw*edto(i)*(ptem1-ptem2))*grav/dp
+          endif
+        enddo
+      enddo
+      do i = 1, im
+        if(cnvflg(i)) then
+          indx = ktcon(i)
+          dp = 1000. * del(i,indx)
+          tg_tem = eta(i,indx-1) * grav / dp
+          tg_dellaq(i,indx) = tg_tem * tg_qcko(i,indx-1)
+          tg_dellal(i,indx) = tg_tem * tg_qlkt(i)
+        endif
+      enddo
+      tg_flx = 0.
+      do k = 1, km1
+        do i = 1, im
+          if(cnvflg(i) .and. k < ktcon(i)) then
+            tem = 0.
+            if(k >= kb(i)) tem = eta(i,k)
+            if(k <= jmin(i)) then
+              tem = tem - edto(i) * etad(i,k)
+            endif
+            if(tem > 0.) then
+              rrkp = 0.
+              if(abs(q_diff(i,k)) > 1.e-22)
+     &               rrkp = q_diff(i,k+1) / q_diff(i,k)
+              phkp = (rrkp+abs(rrkp)) / (1.+abs(rrkp))
+              tg_tem1 = tg_qv(i,k+1) +
+     &                   phkp*(tg_qo(i,k)-tg_qv(i,k+1))
+              tg_flx(i,k) = tem * tg_tem1
+            elseif(tem < 0.) then
+              rrkp = 0.
+              if(abs(q_diff(i,k)) > 1.e-22)
+     &               rrkp = q_diff(i,k-1) / q_diff(i,k)
+              phkp = (rrkp+abs(rrkp)) / (1.+abs(rrkp))
+              tg_tem1 = tg_qv(i,k) +
+     &                  phkp*(tg_qo(i,k)-tg_qv(i,k))
+              tg_flx(i,k) = tem * tg_tem1
+            else
+              tg_tem1 = tg_qo(i,k)
+              tg_flx(i,k) = 0.
+            endif
+            if(k == jmin(i)) then
+              dp = 1000. * del(i,k+1)
+              tg_dellaq(i,k+1) = tg_dellaq(i,k+1) -
+     &            edto(i) * etad(i,k) * tg_tem1 * grav/dp
+            endif
+            if(k == kb(i)) then
+              dp = 1000. * del(i,k)
+              tg_dellaq(i,k) = tg_dellaq(i,k) -
+     &            eta(i,k) * tg_tem1 * grav/dp
+            endif
+          endif
+        enddo
+      enddo
+      do k = 1, km1
+        do i = 1, im
+          if(cnvflg(i) .and. k <= ktcon(i)) then
+             dp = 1000. * del(i,k)
+             tg_dellaq(i,k) = tg_dellaq(i,k) +
+     &           (tg_flx(i,k) - tg_flx(i,k-1)) * grav/dp
+          endif
+        enddo
+      enddo      
 !
 !  for tracers including TKE & ozone
 !
@@ -3197,6 +3429,17 @@ c
           endif
         enddo
       enddo
+!  qv_tag: apply with the same cloud-base mass flux as new_q1
+      do k = 1, km
+        do i = 1, im
+          if (cnvflg(i) .and. k <= kmax(i)) then
+            if(k <= ktcon(i)) then
+              tg_newqv(i,k) = tg_qv(i,k)
+     &                      + xmb(i) * dt2 * tg_dellaq(i,k)
+            endif
+          endif
+        enddo
+      enddo      
 !
 ! Negative moisture is set to zero after borrowing it from
 !  positive values within the mass-flux transport layers
@@ -3243,6 +3486,52 @@ c
           endif
         enddo
       enddo
+
+!  qv_tag: negative-moisture borrowing on the tag's own sums
+      if (tg_n > 0) then
+      do i = 1,im
+        tg_sumn(i) = 0.
+        tg_sump(i) = 0.
+        tg_rtnp(i) = 1.
+      enddo
+      do k = 1,km1
+        do i = 1,im
+          if(cnvflg(i) .and. k <= ktcon(i)) then
+            tg_tem = tg_newqv(i,k) * delp(i,k) / grav
+            if(tg_newqv(i,k) < 0.) tg_sumn(i) = tg_sumn(i)+tg_tem
+            if(tg_newqv(i,k) > 0.) tg_sump(i) = tg_sump(i)+tg_tem
+          endif
+        enddo
+      enddo
+      do i = 1,im
+        if(cnvflg(i)) then
+          if(tg_sump(i) > 0. .and. tg_sumn(i) < 0.) then
+            if(tg_sump(i) > abs(tg_sumn(i))) then
+              tg_rtnp(i) = tg_sumn(i) / tg_sump(i)
+            else
+              tg_rtnp(i) = tg_sump(i) / tg_sumn(i)
+            endif
+          endif
+        endif
+      enddo
+      do k = 1,km1
+        do i = 1,im
+          if(cnvflg(i) .and. k <= ktcon(i)) then
+            if(tg_rtnp(i) < 0.) then
+              if(tg_sump(i) > abs(tg_sumn(i))) then
+                if(tg_newqv(i,k) < 0.) tg_newqv(i,k) = 0.
+                if(tg_newqv(i,k) > 0.) tg_newqv(i,k) =
+     &            (1.+tg_rtnp(i))*tg_newqv(i,k)
+              else
+                if(tg_newqv(i,k) < 0.) tg_newqv(i,k) =
+     &            (1.+tg_rtnp(i))*tg_newqv(i,k)
+                if(tg_newqv(i,k) > 0.) tg_newqv(i,k) = 0.
+              endif
+            endif
+          endif
+        enddo
+      enddo
+      endif
 !
       if (.not.hwrf_samfdeep) then
        indx = ntk - 2
@@ -3389,6 +3678,8 @@ c
         rntot(i) = 0.
         delqev(i) = 0.
         delq2(i) = 0.
+        tg_rn(i) = 0.
+        
         flg(i) = cnvflg(i)
       enddo
       do k = km, 1, -1
@@ -3421,6 +3712,9 @@ c
               if(k >= jmin(i)) adw = 0.
               rain =  aup * pwo(i,k) + adw * edto(i) * pwdo(i,k)
               rn(i) = rn(i) + rain * xmb(i) * .001 * dt2
+              tg_rain = aup * tg_pwo(i,k)
+     &             + adw * edto(i) * tg_pwdo(i,k)
+              tg_rn(i) = tg_rn(i) + tg_rain * xmb(i) * .001 * dt2
             endif
             if(flg(i) .and. k < ktcon(i)) then
 !             evef = edt(i) * evfact
@@ -3442,6 +3736,11 @@ c
                 flg(i) = .false.
               endif
               if(rn(i) > 0. .and. qevap(i) > 0.) then
+!  qv_tag: sub-cloud rain evaporation (Stewart 1975 hook; ratio now)
+                tg_rr  = tg_rn(i) / rn(i)
+                tg_qev = qevap(i) * tg_rr
+                tg_newqv(i,k) = tg_newqv(i,k) + tg_qev
+                tg_rn(i) = tg_rn(i) - .001 * tg_qev * tem1
                 new_q1(i,k) = new_q1(i,k) + qevap(i)
                 new_t1(i,k) = new_t1(i,k) - elocp * qevap(i)
                 rn(i) = rn(i) - .001 * qevap(i) * tem1
@@ -3488,6 +3787,9 @@ c    moistening, rn can become negative, in this case, we back out of the
 c    heating and the moistening
 c
           if(rn(i) < 0. .and. .not.flg(i)) rn(i) = 0.
+          !  qv_tag: mirror final rn reset, pass tagged deep precip out
+          if(rn(i) <= 0.) tg_rn(i) = 0.
+          if (present(rn_tag)) rn_tag(i) = tg_rn(i) 
           if(rn(i) <= 0.) then
             rn(i) = 0.
           else
@@ -3542,6 +3844,13 @@ c
             if (k >= kbcon(i) .and. k <= ktcon(i)) then
               tem  = dellal(i,k) * xmb(i) * dt2
               tem1 = max(0.0, min(1.0, (tcr-new_t1(i,k))*tcrf))
+              tg_tem = tg_dellal(i,k) * xmb(i) * dt2
+              if (new_qtr(i,k,2) > -999.0) then
+                tg_dqi(i,k) = tg_tem * tem1
+                tg_dql(i,k) = tg_tem * (1.0-tem1)
+              else
+                tg_dqi(i,k) = tg_tem
+              endif
               if (new_qtr(i,k,2) > -999.0) then
                 new_qtr(i,k,1) = new_qtr(i,k,1) + tem * tem1            ! ice
                 new_qtr(i,k,2) = new_qtr(i,k,2) + tem *(1.0-tem1)       ! water
@@ -3562,6 +3871,8 @@ c
             if (k <= kmax(i)) then
               new_t1(i,k) = to(i,k)
               new_q1(i,k) = qo(i,k)
+              tg_newqv(i,k) = tg_qo(i,k)
+              
               new_u1(i,k) = uo(i,k)
               new_v1(i,k) = vo(i,k)
             endif
@@ -3706,7 +4017,43 @@ c
       ten_u = (new_u1 - u1)/delt 
       ten_v = (new_v1 - v1)/delt
       dqtr  = (new_qtr - qtr)/delt
-
+!  qv_tag: in-scheme tag tendencies replace the generic tracer path
+      if (tg_n > 0) then
+        dqtr(:,:,tg_j)    = (tg_newqv - tg_qv) / delt
+        ten_q(:,:,tg_n+1) = tg_dql / delt
+        ten_q(:,:,tg_n+2) = tg_dqi / delt
+!  DEBUG DBGC (mode 2: all four ~0 if tags entered equal to real)
+        if (tg_ndbg < 20) then
+          tg_ndbg = tg_ndbg + 1
+          print *, 'DBGC', maxval(abs(tg_newqv - new_q1)),
+     &      maxval(abs(dqtr(:,:,tg_j) - ten_q(:,:,1))),
+     &      maxval(abs(ten_q(:,:,tg_n+1) - dqtr(:,:,2))),
+     &      maxval(abs(ten_q(:,:,tg_n+2) - dqtr(:,:,1)))
+        endif
+      endif
+!  DEBUG DBGE: locate deep tag/real divergence (remove later)
+      if (tg_n > 0) then
+        do i = 1, im
+          if (cnvflg(i)) then
+          do k = 1, km
+            tg_tem  = abs(tg_newqv(i,k) - new_q1(i,k))
+            tg_tem1 = abs(tg_dqi(i,k)
+     &              - (new_qtr(i,k,1) - qtr(i,k,1)))
+            if ((tg_tem > 1.e-13 .or. tg_tem1 > 1.e-13)
+     &          .and. tg_ndbge < 60) then
+              tg_ndbge = tg_ndbge + 1
+              print *, 'DBGE k',k,' kb',kb(i),' kbcon',kbcon(i),
+     &          ' ktcon',ktcon(i),' ktcon1',ktcon1(i),' rn',rn(i)
+              print *, 'DBGE   dqv',tg_newqv(i,k)-new_q1(i,k),
+     &          ' dqi',tg_dqi(i,k)-(new_qtr(i,k,1)-qtr(i,k,1)),
+     &          ' dal',tg_dellal(i,k)-dellal(i,k),
+     &          ' dlkt',tg_qlkt(i)-qlko_ktcon(i),
+     &          ' qi_detr',tg_dqi(i,k)
+            endif
+          enddo
+          endif
+        enddo
+      endif      
       return
       end subroutine samfdeepcnv_run
 

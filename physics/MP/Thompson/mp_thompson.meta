@@ -970,6 +970,49 @@
   type = real
   kind = kind_phys
   intent = out
+[gq0]
+  standard_name = tracer_concentration
+  long_name = tracer concentration
+  units = kg kg-1
+  dimensions = (horizontal_loop_extent,vertical_layer_dimension,number_of_tracers)
+  type = real
+  kind = kind_phys
+  intent = in
+[nqvtag]
+  standard_name = index_of_tagged_water_vapor_in_tracer_concentration_array
+  long_name = tracer index for tagged water vapor
+  units = index
+  dimensions = ()
+  type = integer
+  intent = in
+  optional = True
+[qvtag_floor_frac]
+  standard_name = tagged_fraction_of_microphysics_vapor_floor_water
+  long_name = tagged fraction given to water added by the microphysics vapor floor
+  units = frac
+  dimensions = ()
+  type = real
+  kind = kind_phys
+  intent = in
+  optional = True
+[rainmp_tag]
+  standard_name = lwe_thickness_of_explicit_rain_amount_of_tagged_water
+  long_name = tagged explicit rain amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = inout
+  optional = True
+[snowmp_tag]
+  standard_name = lwe_thickness_of_explicit_frozen_precipitation_amount_of_tagged_water
+  long_name = tagged explicit snow plus graupel plus ice amount on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent)
+  type = real
+  kind = kind_phys
+  intent = inout
+  optional = True  
 [dspechum]
   standard_name = tendency_of_specific_humidity
   long_name = water vapor specific humidity tendency

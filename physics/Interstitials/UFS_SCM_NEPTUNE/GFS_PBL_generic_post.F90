@@ -21,7 +21,7 @@
         rd, cp, fvirt, hvap, t1, q1, prsl, hflx, ushfsfci, oceanfrac, kdt, dusfc_cice, dvsfc_cice,                             &
         dtsfc_cice, dqsfc_cice, use_med_flux, dtsfc_med, dqsfc_med, dusfc_med, dvsfc_med, wet, dry, icy, wind, stress_wat,     &
         hflx_wat, evap_wat, ugrs1, vgrs1, hffac, ugrs, vgrs, tgrs, qgrs, huge,                                                 &
-        gt0, gq0, gu0, gv0, errmsg, errflg)
+        gt0, gq0, gu0, gv0, tagging, wtr_nset, wtr_nphase, wtr_idx, errmsg, errflg)
 
       use machine,                only : kind_phys
       use GFS_PBL_generic_common, only : set_aerosol_tracer_index
@@ -55,6 +55,9 @@
       real(kind=kind_phys), dimension(:,:), intent(in) :: ugrs, vgrs, tgrs
 
       real(kind=kind_phys), dimension(:,:, :), intent(in) :: dvdftra
+      ! water tracers: diffused just before TKE, set by set, phases qv,ql,qi,qr,qs,qg
+      logical, intent(in) :: tagging
+      integer, intent(in) :: wtr_nset, wtr_nphase, wtr_idx(:,:)
       real(kind=kind_phys), dimension(:,:), intent(in) :: ten_t, ten_u, ten_v
       real(kind=kind_phys), dimension(:,:), intent(out) :: ten_t_pbl,ten_q_pbl
       real(kind=kind_phys), dimension(:,:,:), intent(out) :: ten_q
@@ -88,7 +91,7 @@
       real(kind=kind_phys), parameter :: zero  = 0.0_kp, one = 1.0_kp
 !     real(kind=kind_phys), parameter :: huge  = 9.9692099683868690E36 ! NetCDF float FillValue, same as in GFS_typedefs.F90
       real(kind=kind_phys), parameter :: qmin  = 1.0e-8_kp
-      integer :: i, k, kk, k1, n
+      integer :: i, k, kk, k1, n, s, p
       real(kind=kind_phys) :: tem, rho
       integer :: idtend
       
@@ -107,6 +110,17 @@
           do k=1,levs
             do i=1,im
               ten_q(i,k,ntke)  = dvdftra(i,k,ntkev)
+            enddo
+          enddo
+        endif
+!
+        if (tagging) then
+          n = nvdiff - wtr_nset*wtr_nphase
+          if (ntke>0) n = n - 1
+          do s=1,wtr_nset
+            do p=1,wtr_nphase
+              n = n + 1
+              ten_q(:,:,wtr_idx(s,p)) = dvdftra(:,:,n)
             enddo
           enddo
         endif

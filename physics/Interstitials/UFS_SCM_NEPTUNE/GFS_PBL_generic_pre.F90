@@ -17,7 +17,7 @@
         imp_physics_tempo, lthailaware, imp_physics_mg, imp_physics_fer_hires,           &
         imp_physics_nssl, ltaerosol, mraerosol, nssl_ccn_on, nssl_hail_on, nssl_3moment, &
         hybedmf, do_shoc, satmedmf, qgrs, vdftra,                                        &
-        ugrs, vgrs, tgrs, errmsg, errflg)
+        ugrs, vgrs, tgrs, tagging, wtr_nset, wtr_nphase, wtr_idx, errmsg, errflg)
         
       use machine,                only : kind_phys
       use GFS_PBL_generic_common, only : set_aerosol_tracer_index
@@ -40,6 +40,9 @@
       real(kind=kind_phys), dimension(:,:,:), intent(in) :: qgrs
       real(kind=kind_phys), dimension(:,:), intent(in) :: ugrs, vgrs, tgrs
       real(kind=kind_phys), dimension(:,:, :), intent(inout) :: vdftra
+      ! water tracers: diffused just before TKE, set by set, phases qv,ql,qi,qr,qs,qg
+      logical, intent(in) :: tagging
+      integer, intent(in) :: wtr_nset, wtr_nphase, wtr_idx(:,:)
 
       ! CCPP error handling variables
       character(len=*), intent(out) :: errmsg
@@ -48,7 +51,7 @@
       real (kind=kind_phys), parameter :: zero = 0.0_kp, one=1.0_kp
 
       ! Local variables
-      integer :: i, k, kk, k1, n
+      integer :: i, k, kk, k1, n, s, p
 
       ! Initialize CCPP error handling variables
       errmsg = ''
@@ -313,6 +316,17 @@
               do i=1,im
                 vdftra(i,k,k1) = qgrs(i,k,n)
               enddo
+            enddo
+          enddo
+        endif
+!
+        if (tagging) then
+          n = nvdiff - wtr_nset*wtr_nphase
+          if (ntke>0) n = n - 1
+          do s=1,wtr_nset
+            do p=1,wtr_nphase
+              n = n + 1
+              vdftra(:,:,n) = qgrs(:,:,wtr_idx(s,p))
             enddo
           enddo
         endif

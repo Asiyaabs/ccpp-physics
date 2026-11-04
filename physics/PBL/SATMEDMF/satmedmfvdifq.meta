@@ -2,6 +2,7 @@
   name = satmedmfvdifq
   type = scheme
   dependencies = ../../tools/funcphys.f90,../../tools/canopy_utils_mod.f,../../hooks/machine.F,../mfpbltq.f,mfscuq.f,../tridi.f
+  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]
@@ -812,6 +813,49 @@
   type = real
   kind = kind_phys
   intent = out
+[tagging]
+  standard_name = flag_for_water_tracers
+  long_name = master switch for water tracers
+  units = flag
+  dimensions = ()
+  type = logical
+  intent = in
+[wtr_nset]
+  standard_name = number_of_water_tracer_sets
+  long_name = number of water tracer sets
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_nphase]
+  standard_name = number_of_water_tracer_phases
+  long_name = number of water phases per water tracer set
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_kind]
+  standard_name = kind_of_water_tracer_sets
+  long_name = kind of each water tracer set (1 bulk, 2 tag)
+  units = index
+  dimensions = (number_of_water_tracer_sets)
+  type = integer
+  intent = in
+[wtr_species]
+  standard_name = species_of_water_tracer_sets
+  long_name = species of each water tracer set (1 H2O, 2 HDO, 3 H218O)
+  units = index
+  dimensions = (number_of_water_tracer_sets)
+  type = integer
+  intent = in
+[wtr_qflx]
+  standard_name = surface_upward_water_flux_of_water_tracers
+  long_name = surface upward water flux of each water tracer set
+  units = kg m-2 s-1
+  dimensions = (horizontal_loop_extent,number_of_water_tracer_sets)
+  type = real
+  kind = kind_phys
+  intent = inout
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

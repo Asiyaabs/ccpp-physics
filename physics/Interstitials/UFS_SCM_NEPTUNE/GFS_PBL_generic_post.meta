@@ -1060,6 +1060,34 @@
   type = real
   kind = kind_phys
   intent = inout
+[tagging]
+  standard_name = flag_for_water_tracers
+  long_name = master switch for water tracers
+  units = flag
+  dimensions = ()
+  type = logical
+  intent = in
+[wtr_nset]
+  standard_name = number_of_water_tracer_sets
+  long_name = number of water tracer sets
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_nphase]
+  standard_name = number_of_water_tracer_phases
+  long_name = number of water phases per water tracer set
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_idx]
+  standard_name = index_of_water_tracers_in_tracer_concentration_array
+  long_name = tracer index of each water tracer set and phase
+  units = index
+  dimensions = (number_of_water_tracer_sets,number_of_water_tracer_phases)
+  type = integer
+  intent = in
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

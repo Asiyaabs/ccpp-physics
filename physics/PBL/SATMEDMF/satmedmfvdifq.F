@@ -102,11 +102,15 @@
      &     ntqv,dtend,dtidx,index_of_temperature,index_of_x_wind,       &
      &     index_of_y_wind,index_of_process_pbl,gen_tend,ldiag3d,       &
      &     ten_t, ten_u, ten_v,                                         &
+     &     tagging,wtr_nset,wtr_nphase,wtr_kind,wtr_species,wtr_qflx,   &
      &     errmsg,errflg)
 
 !
       use machine  , only : kind_phys
       use funcphys , only : fpvs
+      use water_tracers_config, only : wtr_kind_bulk
+      use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
+     &                                wtr_proc_cond_liq
 !
       implicit none
 !
@@ -168,6 +172,15 @@
       logical, intent(in)  :: dspheat
       real(kind=kind_phys), intent(out) :: ten_t(:,:),                  &
      &                                     ten_u(:,:), ten_v(:,:)
+!     water tracers: in the PBL tracer array they sit just before TKE,
+!     set by set, phases in the order qv,ql,qi,qr,qs,qg
+      logical, intent(in) :: tagging
+      integer, intent(in) :: wtr_nset, wtr_nphase, wtr_kind(:),         &
+     &                       wtr_species(:)
+      real(kind=kind_phys), intent(inout) :: wtr_qflx(:,:)
+      integer :: iwv, iwl
+      real(kind=kind_phys) :: wflx, wqt, wqm0, wqm1
+      real(kind=kind_phys) :: wqv(im,km)
 !  flag for TTE-EDMF scheme
       logical, intent(in)  :: tte_edmf
 !     
@@ -1232,6 +1245,64 @@
      &    thlx,thvx,thlvx,gdx,thetae,
      &    krad,mrad,radmin,buod,wush,tkemean,vez0fun,xmfd,
      &    tcdo,qcdo,ucdo,vcdo,xlamde,bl_dnfr)
+!
+!     water tracers: updraft (mfpbltq) and downdraft (mfscuq) parcels.
+!     The model parcel carries total water qv+ql, entrained level by
+!     level, and splits it into vapour and cloud water (condensation).
+!     The tracer parcel of each set does the same: its total water is
+!     entrained like the model's, scaled by the model's total-water
+!     change in the split, and its cloud water is condensed from it.
+!     This replaces the passive entrainment of the qv and ql tracers.
+      if (tagging) then
+        do n = 1, wtr_nset
+          iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
+          iwl = iwv + 1
+          do k = 2, kmpbl
+            do i = 1, im
+              if (pcnvflg(i) .and. k <= kpbl(i)) then
+                dz   = zl(i,k) - zl(i,k-1)
+                tem  = 0.5 * xlamue(i,k-1) * dz
+                factor = 1. + tem
+                wqm0 = ((1.-tem)*(qcko(i,k-1,1)+qcko(i,k-1,ntcw))+tem*
+     &                 ((q1(i,k-1,1)+q1(i,k-1,ntcw))+
+     &                  (q1(i,k,1)+q1(i,k,ntcw))))/factor
+                wqm1 = qcko(i,k,1) + qcko(i,k,ntcw)
+                wqt  = ((1.-tem)*(qcko(i,k-1,iwv)+qcko(i,k-1,iwl))+tem*
+     &                 ((q1(i,k-1,iwv)+q1(i,k-1,iwl))+
+     &                  (q1(i,k,iwv)+q1(i,k,iwl))))/factor
+                if (wqm0 > 0.) wqt = wqt * wqm1 / wqm0
+                qcko(i,k,iwv) = wqt
+                qcko(i,k,iwl) = 0.
+                call wtr_transfer(wqm1, qcko(i,k,iwv), qcko(i,k,ntcw),
+     &               qcko(i,k,iwl), wtr_alpha(wtr_species(n),
+     &               wtr_proc_cond_liq, tcko(i,k)))
+              endif
+            enddo
+          enddo
+          do k = kmscu, 1, -1
+            do i = 1, im
+              if (scuflg(i) .and. k >= mrad(i) .and. k < krad(i)) then
+                dz   = zl(i,k+1) - zl(i,k)
+                tem  = 0.5 * xlamde(i,k) * dz
+                factor = 1. + tem
+                wqm0 = ((1.-tem)*(qcdo(i,k+1,1)+qcdo(i,k+1,ntcw))+tem*
+     &                 ((q1(i,k,1)+q1(i,k,ntcw))+
+     &                  (q1(i,k+1,1)+q1(i,k+1,ntcw))))/factor
+                wqm1 = qcdo(i,k,1) + qcdo(i,k,ntcw)
+                wqt  = ((1.-tem)*(qcdo(i,k+1,iwv)+qcdo(i,k+1,iwl))+tem*
+     &                 ((q1(i,k,iwv)+q1(i,k,iwl))+
+     &                  (q1(i,k+1,iwv)+q1(i,k+1,iwl))))/factor
+                if (wqm0 > 0.) wqt = wqt * wqm1 / wqm0
+                qcdo(i,k,iwv) = wqt
+                qcdo(i,k,iwl) = 0.
+                call wtr_transfer(wqm1, qcdo(i,k,iwv), qcdo(i,k,ntcw),
+     &               qcdo(i,k,iwl), wtr_alpha(wtr_species(n),
+     &               wtr_proc_cond_liq, tcdo(i,k)))
+              endif
+            enddo
+          enddo
+        enddo
+      endif
 
       if (tc_pbl == 1) then
 !>  - unify mass fluxes with Cu
@@ -2453,6 +2524,27 @@ c
           enddo
         enddo
       endif
+!
+!     water tracers: surface evaporation into the vapour tracer of each
+!     set (tag source 'surface': all surface evaporation is tagged).
+!     Bulk sets get evap like qv. Dew/frost (evap < 0) takes tagged
+!     vapour at the tag ratio of the lowest layer.
+!     (isotopes: surface fractionation is applied with the surface step)
+      if (tagging) then
+        do n = 1, wtr_nset
+          iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
+          is  = (iwv-1) * km
+          do i = 1, im
+            if (evap(i) >= 0. .or. wtr_kind(n) == wtr_kind_bulk) then
+              wflx = evap(i)
+            else
+              wflx = evap(i) * q1(i,1,iwv) / max(q1(i,1,1),qmin)
+            endif
+            f2(i,1+is) = q1(i,1,iwv) + dtdz1(i) * wflx
+            wtr_qflx(i,n) = rho_a(i) * wflx
+          enddo
+        enddo
+      endif
 c
       do k = 1,km1
         do i = 1,im
@@ -2677,6 +2769,9 @@ c
 !  borrowing them from positive values within the mass-flux
 !  transport layers
 !
+!     water tracers: keep the model vapour before each borrowing below
+      if (tagging) wqv(:,:) = f2(:,1:km)
+!
 ! For the negative liquid water, first borrow water from vapor
 !   and then borrow it from the other layers if there is still
 !   negative water
@@ -2714,6 +2809,22 @@ c
         enddo
       endif
 !
+!     water tracers: the vapour each layer gave to cloud water above is
+!     moved from the vapour tracer to the cloud water tracer of each set
+      if (tagging) then
+        do n = 1, wtr_nset
+          iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
+          iwl = iwv + 1
+          do k = 1, kps
+            do i = 1, im
+              call wtr_transfer(wqv(i,k), f2(i,k+(iwv-1)*km),
+     &             wqv(i,k)-f2(i,k), f2(i,k+(iwl-1)*km))
+            enddo
+          enddo
+        enddo
+        wqv(:,:) = f2(:,1:km)
+      endif
+!
 ! For the negative rain water, first borrow water from vapor
 !   and then borrow it from the other layers if there is still
 !   negative water
@@ -2747,6 +2858,21 @@ c
                 endif
               endif
             endif
+          enddo
+        enddo
+      endif
+!
+!     water tracers: the vapour each layer gave to rain above is
+!     moved from the vapour tracer to the rain tracer of each set
+      if (tagging .and. ntrw > 0) then
+        do n = 1, wtr_nset
+          iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
+          iwl = iwv + 3
+          do k = 1, kps
+            do i = 1, im
+              call wtr_transfer(wqv(i,k), f2(i,k+(iwv-1)*km),
+     &             wqv(i,k)-f2(i,k), f2(i,k+(iwl-1)*km))
+            enddo
           enddo
         enddo
       endif

@@ -59,10 +59,14 @@
      &     ten_q, dot,ncloud,hpbl,ud_mf,dt_mf,cnvw,cnvc,                &
      &     clam,c0s,c1,evef,pgcon,asolfac,hwrf_samfshal,                & 
      &     sigmain,sigmaout,omegain,omegaout,betadcu,betamcu,betascu,   &
-     &     lbb1,lbb2,lbb3,dt_decay,cat_adj_shal,errmsg,errflg)
+     &     lbb1,lbb2,lbb3,dt_decay,cat_adj_shal,                        &
+     &     tagging,wtr_nset,wtr_nphase,wtr_idx,wtr_species,otsptflag,   &
+     &     wtr_raincs,errmsg,errflg)
 !
       use machine , only : kind_phys
       use funcphys , only : fpvs
+      use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
+     &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_proc_freeze
 
       implicit none
 !
@@ -102,6 +106,17 @@
       logical,          intent(in)  :: hwrf_samfshal,first_time_step,   &
      &     restart,progsigma,progomega
       real(kind_phys), intent(in) :: cat_adj_shal
+!     water tracers: the vapour tracers are convectively transported
+!     (position in qtr from otsptflag); the other phases are not,
+!     like the model condensate
+      logical, intent(in) :: tagging, otsptflag(:)
+      integer, intent(in) :: wtr_nset, wtr_nphase, wtr_idx(:,:),        &
+     &                       wtr_species(:)
+      real(kind_phys), intent(out) :: wtr_raincs(:,:)
+      logical wtag
+      integer m, kv, kq, wkv(wtr_nset)
+      real(kind=kind_phys) wrt(im,km,wtr_nset), wrn(im,wtr_nset),       &
+     &                     wrm, wql, wev, wdl, wdi
       character(len=*), intent(out) :: errmsg
       integer,          intent(out) :: errflg
 
@@ -273,6 +288,17 @@ c  cloud water
       new_v1 = v1
       new_q1 = q1
       new_qtr = qtr
+!     water tracers: wkv = position of each vapour tracer in ctr
+      wtr_raincs = 0.
+      wtag = tagging .and. .not. hwrf_samfshal
+      if (wtag) then
+        wrt = 0.
+        wrn = 0.
+        do m = 1, wtr_nset
+          wkv(m) = count(otsptflag(2:wtr_idx(m,1)))
+          if (.not. otsptflag(wtr_idx(m,1))) wtag = .false.
+        enddo
+      endif
 
 c-----------------------------------------------------------------------
 !
@@ -722,6 +748,22 @@ c
         enddo
        enddo
        enddo
+      endif
+!     water tracers: vapour tracers on interface levels in proportion
+!     to the model vapour qo (tracer/model ratio of the layer qo uses)
+      if (wtag) then
+        do m = 1, wtr_nset
+          kv = wkv(m)
+          do k = 1, km1
+            do i = 1, im
+              if (cnvflg(i) .and. k <= kmax(i)) then
+                kq = min(k+1, kmax(i))
+                if (q1(i,kq) > 0.)
+     &            ctro(i,k,kv) = qo(i,k) * ctr(i,kq,kv) / q1(i,kq)
+              endif
+            enddo
+          enddo
+        enddo
       endif
 c
 c  look for the level of free convection as cloud base
@@ -1738,6 +1780,49 @@ c
         endif
       enddo
       endif
+!
+!     water tracers: the updraft vapour tracer of each set (ecko) follows
+!     the model updraft water qcko: entrained like it, and giving its
+!     share of the condensate removed at each level (rain pwo and
+!     detrained cloud water dellal) and of the cloud-top cloud water
+!     (qlko_ktcon). wrt = tracer share of the condensate at each level.
+      if (wtag) then
+        do m = 1, wtr_nset
+          kv = wkv(m)
+          do k = 2, km1
+            do i = 1, im
+              if (cnvflg(i)) then
+                if (k > kb(i) .and. k < ktcon(i)) then
+                  dz   = zi(i,k) - zi(i,k-1)
+                  tem  = 0.25 * (xlamue(i,k)+xlamue(i,k-1)) * dz
+                  tem  = cq * tem
+                  factor = 1. + tem
+                  ecko(i,k,kv) = ((1.-tem)*ecko(i,k-1,kv)+tem*
+     &                           (ctro(i,k,kv)+ctro(i,k-1,kv)))/factor
+                  ercko(i,k,kv) = ecko(i,k,kv)
+                  wrm = qrcko(i,k) - qcko(i,k)
+                  if (k == ktcon(i)-1) wrm = wrm - qlko_ktcon(i)
+                  wql = 0.
+                  call wtr_transfer(qrcko(i,k), ecko(i,k,kv), wrm, wql,
+     &                 wtr_alpha(wtr_species(m), wtr_proc_cond_liq,
+     &                 to(i,k)))
+                  if (wrm > 0.) wrt(i,k,m) = wql / wrm
+                endif
+              endif
+            enddo
+          enddo
+          do i = 1, im
+            if (cnvflg(i) .and. qlko_ktcon(i) > 0.) then
+              k = ktcon(i) - 1
+              wql = 0.
+              call wtr_transfer(qcko(i,k)+qlko_ktcon(i), ecko(i,k,kv),
+     &             qlko_ktcon(i), wql, wtr_alpha(wtr_species(m),
+     &             wtr_proc_cond_liq, to(i,k)))
+              wrt(i,ktcon(i),m) = wql / qlko_ktcon(i)
+            endif
+          enddo
+        enddo
+      endif
 c
      
 c--- compute precipitation efficiency in terms of windshear
@@ -2436,6 +2521,8 @@ c
             if(cnvflg(i)) then
               if(k < ktcon(i) .and. k > kb(i)) then
                 rn(i) = rn(i) + pwo(i,k) * xmb(i) * .001 * dt2
+                if (wtag) wrn(i,:) = wrn(i,:)
+     &                   + pwo(i,k) * wrt(i,k,:) * xmb(i) * .001 * dt2
               endif
             endif
             if(flg(i) .and. k < ktcon(i)) then
@@ -2467,6 +2554,17 @@ c
                 endif
                 new_q1(i,k) = new_q1(i,k) + qevap(i)
                 new_t1(i,k) = new_t1(i,k) - elocp * qevap(i)
+!               water tracers: rain evaporation (alpha hook)
+                if (wtag) then
+                  do m = 1, wtr_nset
+                    wev = 0.
+                    call wtr_transfer(rn(i)+qevap(i)*tem, wrn(i,m),
+     &                   qevap(i)*tem, wev, wtr_alpha(wtr_species(m),
+     &                   wtr_proc_evap_liq, new_t1(i,k)))
+                    new_qtr(i,k,wkv(m)+2) = new_qtr(i,k,wkv(m)+2)
+     &                                    + wev / tem
+                  enddo
+                endif
                 deltv(i) = - elocp*qevap(i)/dt2
                 delq(i) =  + qevap(i)/dt2
                 delqev(i) = delqev(i) + tem * qevap(i)
@@ -2497,6 +2595,15 @@ cj
 !     enddo
 !     enddo
 cj
+!     water tracers: same final rain reset, tracer rain out
+      if (wtag) then
+        do i = 1, im
+          if(cnvflg(i)) then
+            if(rn(i) < 0. .or. .not.flg(i)) wrn(i,:) = 0.
+            wtr_raincs(i,:) = wrn(i,:)
+          endif
+        enddo
+      endif
       do i = 1, im
         if(cnvflg(i)) then
           if(rn(i) < 0. .or. .not.flg(i)) rn(i) = 0.
@@ -2560,6 +2667,36 @@ c
         enddo
       enddo
 !
+      endif
+!
+!     water tracers: detrained cloud water of each set, split into
+!     ice and liquid like the model (alpha hook), as tendencies of the
+!     tracer phases ql and qi (these are not convectively transported)
+      if (wtag .and. ncloud > 0) then
+        do m = 1, wtr_nset
+          do k = 1, km1
+            do i = 1, im
+              if (cnvflg(i)) then
+                if (k >= kbcon(i) .and. k <= ktcon(i)) then
+                  tem  = dellal(i,k) * xmb(i) * dt2
+                  tem1 = max(0.0, min(1.0, (tcr-new_t1(i,k))*tcrf))
+                  wdl = tem * wrt(i,k,m)
+                  wdi = 0.
+                  if (new_qtr(i,k,2) > -999.0) then
+                    call wtr_transfer(tem, wdl, tem*tem1, wdi,
+     &                   wtr_alpha(wtr_species(m), wtr_proc_freeze,
+     &                   new_t1(i,k)))
+                  else
+                    wdi = wdl
+                    wdl = 0.
+                  endif
+                  ten_q(i,k,wtr_idx(m,2)) = wdl / delt
+                  ten_q(i,k,wtr_idx(m,3)) = wdi / delt
+                endif
+              endif
+            enddo
+          enddo
+        enddo
       endif
 !> - Store aerosol concentrations if present
 !     if (.not. hwrf_samfshal) then

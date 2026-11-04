@@ -14,6 +14,8 @@
 !!     wtr_bulk_check = .true.    ! H2O bulk set, must equal the model water exactly
 !!     wtr_init_tags  = 'zero'    ! initial tags: 'zero' | 'bulk' | 'fraction'
 !!     wtr_init_frac  = 0.5       ! initial tag fraction for wtr_init_tags = 'fraction'
+!!     wtr_tag_moisten = .false.  ! test mode: tags also get the forcing moistening (with
+!!                                ! wtr_init_tags = 'bulk', every tag must then equal the bulk set)
 !!   /
 !!
 !! Each set holds one tracer per water phase (qv, ql, qi, qr, qs, qg). Sets, in order:
@@ -55,6 +57,7 @@ module water_tracers_config
      logical            :: bulk_check = .true.
      character(len=16)  :: init_tags  = 'zero'
      real(kind_phys)    :: init_frac  = 0.5_kind_phys
+     logical            :: tag_moisten = .false.
   end type wtr_config_type
 
 contains
@@ -74,10 +77,11 @@ contains
     logical            :: wtr_bulk_check
     character(len=16)  :: wtr_init_tags
     real(kind_phys)    :: wtr_init_frac
+    logical            :: wtr_tag_moisten
     integer            :: unit, ios
 
     namelist /water_tracer_nml/ tagging, wtr_species, wtr_tag_names, wtr_tag_source, &
-                                wtr_bulk_check, wtr_init_tags, wtr_init_frac
+                                wtr_bulk_check, wtr_init_tags, wtr_init_frac, wtr_tag_moisten
 
     errmsg = ''
     errflg = 0
@@ -91,6 +95,7 @@ contains
     wtr_bulk_check    = .true.
     wtr_init_tags     = 'zero'
     wtr_init_frac     = 0.5_kind_phys
+    wtr_tag_moisten   = .false.
 
     if (present(lines)) then
        read(lines, nml=water_tracer_nml, iostat=ios)
@@ -130,6 +135,7 @@ contains
     cfg%bulk_check = wtr_bulk_check
     cfg%init_tags  = adjustl(wtr_init_tags)
     cfg%init_frac  = wtr_init_frac
+    cfg%tag_moisten = wtr_tag_moisten
 
     select case (trim(cfg%init_tags))
     case ('zero', 'bulk')

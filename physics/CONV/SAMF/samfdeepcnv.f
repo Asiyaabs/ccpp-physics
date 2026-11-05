@@ -94,7 +94,7 @@
       use machine , only : kind_phys
       use funcphys , only : fpvs
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
-     &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_proc_freeze
+     &     wtr_proc_cond_liq, wtr_proc_evap_liq
 
       implicit none
 !
@@ -3741,8 +3741,8 @@ c
       endif
 !
 !     water tracers: detrained cloud water of each set, split into
-!     ice and liquid like the model (alpha hook), as tendencies of the
-!     tracer phases ql and qi (these are not convectively transported)
+!     ice and liquid like the model (no fractionation), as tendencies
+!     of the tracer phases ql and qi (not convectively transported)
       if (wtag .and. ncloud > 0) then
         do m = 1, wtr_nset
           do k = 1, km
@@ -3752,15 +3752,9 @@ c
                   tem  = dellal(i,k) * xmb(i) * dt2
                   tem1 = max(0.0, min(1.0, (tcr-new_t1(i,k))*tcrf))
                   wdl = tem * wrt(i,k,m)
-                  wdi = 0.
-                  if (new_qtr(i,k,2) > -999.0) then
-                    call wtr_transfer(tem, wdl, tem*tem1, wdi,
-     &                   wtr_alpha(wtr_species(m), wtr_proc_freeze,
-     &                   new_t1(i,k)))
-                  else
-                    wdi = wdl
-                    wdl = 0.
-                  endif
+                  wdi = wdl
+                  if (new_qtr(i,k,2) > -999.0) wdi = wdl * tem1
+                  wdl = wdl - wdi
                   ten_q(i,k,wtr_idx(m,2)) = wdl / delt
                   ten_q(i,k,wtr_idx(m,3)) = wdi / delt
                 endif

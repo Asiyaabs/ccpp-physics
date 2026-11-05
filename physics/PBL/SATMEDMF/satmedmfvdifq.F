@@ -110,7 +110,7 @@
       use funcphys , only : fpvs
       use water_tracers_config, only : wtr_kind_bulk
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
-     &                                wtr_proc_cond_liq
+     &                         wtr_proc_cond_liq, wtr_proc_dep_ice
 !
       implicit none
 !
@@ -179,8 +179,8 @@
      &                       wtr_species(:)
       real(kind=kind_phys), intent(inout) :: wtr_qflx(:,:)
       integer :: iwv, iwl
-      real(kind=kind_phys) :: wflx, wqt, wqm0, wqm1
-      real(kind=kind_phys) :: wqv(im,km)
+      real(kind=kind_phys) :: wflx, wqt, wqm0, wqm1, wtrc, wdql, wdqr
+      real(kind=kind_phys) :: wqv(im,km), wql0(im,km)
 !  flag for TTE-EDMF scheme
       logical, intent(in)  :: tte_edmf
 !     
@@ -2527,9 +2527,9 @@ c
 !
 !     water tracers: surface evaporation into the vapour tracer of each
 !     set (tag source 'surface': all surface evaporation is tagged).
-!     Bulk sets get evap like qv. Dew/frost (evap < 0) takes tagged
-!     vapour at the tag ratio of the lowest layer.
-!     (isotopes: surface fractionation is applied with the surface step)
+!     Bulk sets get evap like qv. Dew/frost (evap < 0) takes vapour
+!     from the lowest layer at its tag ratio (alpha hook).
+!     (isotopes: evaporation fractionation is applied with the surface step)
       if (tagging) then
         do n = 1, wtr_nset
           iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
@@ -2537,10 +2537,21 @@ c
           do i = 1, im
             if (evap(i) >= 0. .or. wtr_kind(n) == wtr_kind_bulk) then
               wflx = evap(i)
+              f2(i,1+is) = q1(i,1,iwv) + dtdz1(i) * wflx
             else
-              wflx = evap(i) * q1(i,1,iwv) / max(q1(i,1,1),qmin)
+              wtrc = q1(i,1,iwv)
+              if (t1(i,1) >= 273.15) then
+                call wtr_transfer(q1(i,1,1), wtrc, -dtdz1(i)*evap(i),
+     &               alpha=wtr_alpha(wtr_species(n), wtr_proc_cond_liq,
+     &               t1(i,1)))
+              else
+                call wtr_transfer(q1(i,1,1), wtrc, -dtdz1(i)*evap(i),
+     &               alpha=wtr_alpha(wtr_species(n), wtr_proc_dep_ice,
+     &               t1(i,1)))
+              endif
+              wflx = (wtrc - q1(i,1,iwv)) / dtdz1(i)
+              f2(i,1+is) = wtrc
             endif
-            f2(i,1+is) = q1(i,1,iwv) + dtdz1(i) * wflx
             wtr_qflx(i,n) = rho_a(i) * wflx
           enddo
         enddo
@@ -2769,8 +2780,12 @@ c
 !  borrowing them from positive values within the mass-flux
 !  transport layers
 !
-!     water tracers: keep the model vapour before each borrowing below
-      if (tagging) wqv(:,:) = f2(:,1:km)
+!     water tracers: keep the model vapour and cloud water before the
+!     borrowing below
+      if (tagging) then
+        wqv(:,:)  = f2(:,1:km)
+        wql0(:,:) = f2(:,(ntcw-1)*km+1:ntcw*km)
+      endif
 !
 ! For the negative liquid water, first borrow water from vapor
 !   and then borrow it from the other layers if there is still
@@ -2807,22 +2822,6 @@ c
             endif
           enddo
         enddo
-      endif
-!
-!     water tracers: the vapour each layer gave to cloud water above is
-!     moved from the vapour tracer to the cloud water tracer of each set
-      if (tagging) then
-        do n = 1, wtr_nset
-          iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
-          iwl = iwv + 1
-          do k = 1, kps
-            do i = 1, im
-              call wtr_transfer(wqv(i,k), f2(i,k+(iwv-1)*km),
-     &             wqv(i,k)-f2(i,k), f2(i,k+(iwl-1)*km))
-            enddo
-          enddo
-        enddo
-        wqv(:,:) = f2(:,1:km)
       endif
 !
 ! For the negative rain water, first borrow water from vapor
@@ -2862,16 +2861,21 @@ c
         enddo
       endif
 !
-!     water tracers: the vapour each layer gave to rain above is
-!     moved from the vapour tracer to the rain tracer of each set
-      if (tagging .and. ntrw > 0) then
+!     water tracers: net vapour given to cloud water (wdql) and to rain
+!     (wdqr) by the two borrowings above, moved from the vapour tracer
+!     to the cloud water and rain tracers of each set (no fractionation)
+      if (tagging) then
         do n = 1, wtr_nset
           iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
-          iwl = iwv + 3
+          iwl = iwv + 1
           do k = 1, kps
             do i = 1, im
-              call wtr_transfer(wqv(i,k), f2(i,k+(iwv-1)*km),
-     &             wqv(i,k)-f2(i,k), f2(i,k+(iwl-1)*km))
+              wdql = f2(i,k+(ntcw-1)*km) - wql0(i,k)
+              wdqr = wqv(i,k) - f2(i,k) - wdql
+              call wtr_transfer(wqv(i,k), f2(i,k+(iwv-1)*km), wdql,
+     &             f2(i,k+(iwl-1)*km))
+              if (ntrw > 0) call wtr_transfer(wqv(i,k)-wdql,
+     &             f2(i,k+(iwv-1)*km), wdqr, f2(i,k+(iwv+2)*km))
             enddo
           enddo
         enddo

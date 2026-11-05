@@ -1044,7 +1044,8 @@ module module_mp_thompson
                               qrten3, qsten3, qgten3, qiten3, niten3, &
                               nrten3, ncten3, qcten3,                 &
                               pfils, pflls,                           &
-                              fs_fac_rain, fs_fac_snow)
+                              fs_fac_rain, fs_fac_snow,               &
+                              wtr_nset, wtr_species, wtr_q, wtr_ppt)
 
          implicit none
 
@@ -1115,6 +1116,18 @@ module module_mp_thompson
                            nrten3, ncten3, qcten3
          ! Fall speed adjustment
          real(wp), INTENT (IN), optional  :: fs_fac_rain, fs_fac_snow
+!..water tracers (wtr_nset = 0 when off): mixing ratio of phases
+!.. qv,qc,qi,qr,qs,qg of each set; surface rain and snow+ice+graupel of
+!.. each set summed over the inner steps (mm, like RAINNCV)
+         integer, intent(in) :: wtr_nset
+         integer, dimension(:), intent(in) :: wtr_species
+         real(wp), dimension(ims:ime, kms:kme, jms:jme, 6, wtr_nset),    &
+                                            intent(inout) :: wtr_q
+         real(wp), dimension(ims:ime, jms:jme, 2, wtr_nset),             &
+                                            intent(out) :: wtr_ppt
+         real(wp), dimension(kts:kte, 6, wtr_nset) :: wq1d
+         real(wp), dimension(2, wtr_nset) :: wppt1
+         real(wp), dimension(wtr_nset) :: wrat
 
    !..Local variables
          real(wp), dimension(kts:kte):: &
@@ -1289,6 +1302,7 @@ module module_mp_thompson
          rand_pert_max = 0.0
          ndt = max(nint(dt_in/dt_inner),1)
          dt = dt_in/ndt
+         if (wtr_nset > 0) wtr_ppt = 0.
          if(dt_in .le. dt_inner) dt= dt_in
 
       !Get the Thompson MP SPP magnitude and standard deviation cutoff,
@@ -1462,6 +1476,11 @@ module module_mp_thompson
                   enddo
                endif
 
+!..water tracers of this column
+               do k = kts, kte
+                  wq1d(k,:,:) = wtr_q(i,k,j,:,:)
+               enddo
+
 !> - Call mp_thompson()
                call mp_thompson(qv1d, qc1d, qi1d, qr1d, qs1d, qg1d, ni1d,     &
                            nr1d, nc1d, nwfa1d, nifa1d, t1d, p1d, w1d, dz1d,  &
@@ -1485,12 +1504,14 @@ module module_mp_thompson
                            tten1, qvten1, qrten1, qsten1,                   &
                            qgten1, qiten1, niten1, nrten1, ncten1, qcten1,  &
                            pfil1, pfll1,                                    &
-                           fs_fac_rain, fs_fac_snow)
+                           fs_fac_rain, fs_fac_snow,                        &
+                           wq1d, wtr_species, wppt1)
 
                pcp_ra(i,j) = pcp_ra(i,j) + pptrain
                pcp_sn(i,j) = pcp_sn(i,j) + pptsnow
                pcp_gr(i,j) = pcp_gr(i,j) + pptgraul
                pcp_ic(i,j) = pcp_ic(i,j) + pptice
+               if (wtr_nset > 0) wtr_ppt(i,j,:,:) = wtr_ppt(i,j,:,:) + wppt1
                RAINNCV(i,j) = pptrain + pptsnow + pptgraul + pptice
                RAINNC(i,j) = RAINNC(i,j) + pptrain + pptsnow + pptgraul + pptice
                IF ( PRESENT(snowncv) .AND. PRESENT(snownc) ) THEN
@@ -1545,6 +1566,7 @@ module module_mp_thompson
 
                do k = kts, kte
                   qv(i,k,j) = qv1d(k)
+                  if (wtr_nset > 0) wtr_q(i,k,j,:,:) = wq1d(k,:,:)
                   qc(i,k,j) = qc1d(k)
                   qi(i,k,j) = qi1d(k)
                   qr(i,k,j) = qr1d(k)
@@ -1635,6 +1657,13 @@ module module_mp_thompson
                      else
                         qv(i,k,j) = 1.E-7
                      endif
+!..water tracers: the vapour created here gets the column vapour ratio
+                     do m = 1, wtr_nset
+                        wrat(m) = 1.
+                        if (sum(qv1d) > 0.) wrat(m) = sum(wq1d(:,1,m))/sum(qv1d)
+                        wtr_q(i,k,j,1,m) = wtr_q(i,k,j,1,m)                &
+                                         + (qv(i,k,j) - qv1d(k))*wrat(m)
+                     enddo
                   endif
                enddo
 
@@ -1906,9 +1935,14 @@ module module_mp_thompson
                         tten1, qvten1, qrten1, qsten1,                   &
                         qgten1, qiten1, niten1, nrten1, ncten1, qcten1,  &
                         pfil1, pfll1,                                    &
-                        fs_fac_rain, fs_fac_snow)
+                        fs_fac_rain, fs_fac_snow,                        &
+                        wq, wspec, wppt)
 
       use mpi_f08
+      use water_tracers_utils, only: wtr_transfer, wtr_exchange, wtr_net, &
+                                     wtr_sediment, wtr_alpha,             &
+                                     wtr_proc_cond_liq, wtr_proc_evap_liq,&
+                                     wtr_proc_dep_ice, wtr_proc_subl_ice
 
       implicit none
 
@@ -1944,6 +1978,18 @@ module module_mp_thompson
                           nrten1, ncten1, qcten1
       ! Fall speed adjustment
       real(wp), intent(in), optional :: fs_fac_rain, fs_fac_snow
+!..water tracers (zero size when off): wq(k,phase,set) mixing ratio,
+!.. phases qv,qc,qi,qr,qs,qg; wppt(1,set) rain, wppt(2,set) snow+ice+graupel
+!.. at the surface (mm, like pptrain)
+      real(wp), dimension(kts:,:,:), intent(inout) :: wq
+      integer, dimension(:), intent(in) :: wspec
+      real(wp), dimension(:,:), intent(out) :: wppt
+      real(wp), dimension(kts:kte,6) :: wq0, wq1
+      real(wp), dimension(kts:kte) :: wws
+      real(wp), dimension(6) :: wdq, wsfc, wqb
+      real(wp), dimension(size(wq,3)) :: wrv
+      real(wp) :: wqa
+      integer :: m
 
 #if ( WRF_CHEM == 1 )
       real(wp), dimension(kts:kte), intent(inout) :: &
@@ -2067,6 +2113,19 @@ module module_mp_thompson
 !! signs based on super/subsaturation) and are treated as negatives
 !! where necessary in the tendency equations.
 !+---+-----------------------------------------------------------------+
+
+!..water tracers: model water on entry; column vapour ratio of each set
+!.. (given to water the model creates, e.g. by a floor)
+      if (size(wq,3) > 0) then
+         wppt = 0.
+         do k = kts, kte
+            wq0(k,:) = (/qv1d(k), qc1d(k), qi1d(k), qr1d(k), qs1d(k), qg1d(k)/)
+         enddo
+         do m = 1, size(wq,3)
+            wrv(m) = 1.
+            if (sum(qv1d) > 0.) wrv(m) = sum(wq(:,1,m)) / sum(qv1d)
+         enddo
+      endif
 
       do k = kts, kte
          tten(k) = 0.
@@ -3375,6 +3434,34 @@ module module_mp_thompson
 
       enddo
 
+!..water tracers: process rates above. Vapour exchanges with ice, snow and
+!.. graupel fractionate (one call each, alpha hook); all other exchanges
+!.. (and the clipping on entry) are applied as one net change per level.
+      if (size(wq,3) > 0) then
+         call wtr_state(wq1)
+         do m = 1, size(wq,3)
+            do k = kts, kte
+               orho = 1./rho(k)
+               wdq(3) = (pri_inu(k) + pri_iha(k) + pri_ide(k))*orho*DT
+               wdq(5) = (prs_ide(k) + prs_sde(k))*orho*DT
+               wdq(6) = prg_gde(k)*orho*DT
+               wqa = wq0(k,1)
+               do n = 3, 6
+                  if (n == 4) cycle
+                  call wtr_exchange(wqa, wq(k,1,m), wq0(k,n), wq(k,n,m),&
+                       wdq(n), wtr_alpha(wspec(m), wtr_proc_dep_ice, temp(k)),&
+                       wtr_alpha(wspec(m), wtr_proc_subl_ice, temp(k)))
+                  wqa = wqa - wdq(n)
+               enddo
+               wdq(2) = 0.
+               wdq(4) = 0.
+               wdq(2:6) = wq1(k,2:6) - wq0(k,2:6) - wdq(2:6)
+               wqb(2:6) = wq1(k,2:6) - wdq(2:6)   ! condensate after the exchanges
+               call wtr_net(5, wqb(2:6), wdq(2:6), wq(k,2:6,m), wrv(m))
+            enddo
+         enddo
+      endif
+
 !+---+-----------------------------------------------------------------+
 !> - Update variables for TAU+1 before condensation & sedimention.
 !+---+-----------------------------------------------------------------+
@@ -3639,6 +3726,13 @@ module module_mp_thompson
 
 !+---+-----------------------------------------------------------------+
 
+!..water tracers: condensation (> 0) / evaporation (< 0) of cloud water
+            do m = 1, size(wq,3)
+               call wtr_exchange(qv1d(k)+qvten(k)*DT, wq(k,1,m),        &
+                    qc1d(k)+qcten(k)*DT, wq(k,2,m), prw_vcd(k)*DT,       &
+                    wtr_alpha(wspec(m), wtr_proc_cond_liq, temp(k)),     &
+                    wtr_alpha(wspec(m), wtr_proc_evap_liq, temp(k)))
+            enddo
             qvten(k) = qvten(k) - prw_vcd(k)
             qcten(k) = qcten(k) + prw_vcd(k)
             ncten(k) = ncten(k) + pnc_wcd(k)
@@ -3729,6 +3823,12 @@ module module_mp_thompson
             pnr_rev(k) = min(real(nr(k)*0.99*orho*odts, kind=dp),                  &   ! RAIN2M
                         prv_rev(k) * nr(k)/rr(k))
 
+!..water tracers: rain evaporation
+            do m = 1, size(wq,3)
+               call wtr_transfer(qr1d(k)+qrten(k)*DT, wq(k,4,m),         &
+                    prv_rev(k)*DT, wq(k,1,m),                            &
+                    wtr_alpha(wspec(m), wtr_proc_evap_liq, temp(k)))
+            enddo
             qrten(k) = qrten(k) - prv_rev(k)
             qvten(k) = qvten(k) + prv_rev(k)
             nrten(k) = nrten(k) - pnr_rev(k)
@@ -3762,6 +3862,8 @@ module module_mp_thompson
 !! New in v3.0+ is computing separate for rain, ice, snow, and
 !! graupel species thus making code faster with credit to J. Schmidt.
 !+---+-----------------------------------------------------------------+
+!..water tracers: model water before sedimentation
+      if (size(wq,3) > 0) call wtr_state(wq0)
       nstep = 0
       onstep(:) = 1.0
       ksed1(:) = 1
@@ -4192,6 +4294,24 @@ module module_mp_thompson
          endif ! if(.not. sedi_semi) then
       endif 
 
+!..water tracers: sedimentation of each species, all sub-steps as one
+!.. net fall-out (no fractionation); tracer precipitation at the surface
+      if (size(wq,3) > 0) then
+         call wtr_state(wq1)
+         do k = kts, kte
+            wws(k) = rho(k)*dzq(k)
+         enddo
+         do m = 1, size(wq,3)
+            wsfc = 0.
+            do n = 2, 6
+               call wtr_sediment(kte-kts+1, wws, wq0(:,n), wq1(:,n),     &
+                                 wq(:,n,m), wsfc(n))
+            enddo
+            wppt(1,m) = wsfc(4)
+            wppt(2,m) = wsfc(3) + wsfc(5) + wsfc(6)
+         enddo
+      endif
+
 !+---+-----------------------------------------------------------------+
 !> - Instantly melt any cloud ice into cloud water if above 0C and
 !! instantly freeze any cloud water found below HGFR.
@@ -4300,6 +4420,16 @@ module module_mp_thompson
          if (qg1d(k) .le. R1) qg1d(k) = 0.0
       enddo
 
+!..water tracers: instant melting/freezing and the final floors and clips,
+!.. one net change per level (no fractionation)
+      do m = 1, size(wq,3)
+         do k = kts, kte
+            wdq = (/qv1d(k), qc1d(k), qi1d(k), qr1d(k), qs1d(k), qg1d(k)/)  &
+                - wq1(k,:)
+            call wtr_net(6, wq1(k,:), wdq, wq(k,:,m), wrv(m))
+         enddo
+      enddo
+
 ! Diagnostics
       calculate_extended_diagnostics: if (ext_diag) then
          do k = kts, kte
@@ -4382,7 +4512,21 @@ module module_mp_thompson
             qcten1(k) = qcten(k)*DT
          enddo
       endif calculate_extended_diagnostics
-   
+
+   contains
+
+!..water tracers: model water now (start of step plus tendencies so far)
+      subroutine wtr_state(ws)
+         real(wp), dimension(kts:kte,6), intent(out) :: ws
+         ws(:,1) = qv1d + qvten*DT
+         ws(:,2) = qc1d + qcten*DT
+         ws(:,3) = qi1d + qiten*DT
+         ws(:,4) = qr1d + qrten*DT
+         ws(:,5) = qs1d + qsten*DT
+         ws(:,6) = qg1d + qgten*DT
+      end subroutine wtr_state
+
+
    end subroutine mp_thompson
 !>@}
 

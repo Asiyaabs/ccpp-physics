@@ -4,6 +4,7 @@
   dependencies = ../../hooks/machine.F
   dependencies = ../module_mp_radar.F90
   dependencies = module_mp_thompson.F90,module_mp_thompson_make_number_concentrations.F90
+  dependencies = ../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]
@@ -1078,6 +1079,65 @@
   type = real
   kind = kind_phys
   intent = out
+[tagging]
+  standard_name = flag_for_water_tracers
+  long_name = master switch for water tracers
+  units = flag
+  dimensions = ()
+  type = logical
+  intent = in
+[wtr_nset]
+  standard_name = number_of_water_tracer_sets
+  long_name = number of water tracer sets
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_nphase]
+  standard_name = number_of_water_tracer_phases
+  long_name = number of water phases per water tracer set
+  units = count
+  dimensions = ()
+  type = integer
+  intent = in
+[wtr_idx]
+  standard_name = index_of_water_tracers_in_tracer_concentration_array
+  long_name = tracer index of each water tracer set and phase
+  units = index
+  dimensions = (number_of_water_tracer_sets,number_of_water_tracer_phases)
+  type = integer
+  intent = in
+[wtr_species]
+  standard_name = species_of_water_tracer_sets
+  long_name = species of each water tracer set (1 H2O, 2 HDO, 3 H218O)
+  units = index
+  dimensions = (number_of_water_tracer_sets)
+  type = integer
+  intent = in
+[gq0]
+  standard_name = tracer_concentration
+  long_name = tracer concentration
+  units = kg kg-1
+  dimensions = (horizontal_loop_extent,vertical_layer_dimension,number_of_tracers)
+  type = real
+  kind = kind_phys
+  intent = in
+[wtr_rainmp]
+  standard_name = lwe_thickness_of_explicit_rain_amount_of_water_tracers
+  long_name = explicit rain of each water tracer set on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent,number_of_water_tracer_sets)
+  type = real
+  kind = kind_phys
+  intent = inout
+[wtr_snowmp]
+  standard_name = lwe_thickness_of_explicit_frozen_precipitation_amount_of_water_tracers
+  long_name = explicit snow + ice + graupel of each water tracer set on physics timestep
+  units = m
+  dimensions = (horizontal_loop_extent,number_of_water_tracer_sets)
+  type = real
+  kind = kind_phys
+  intent = inout
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

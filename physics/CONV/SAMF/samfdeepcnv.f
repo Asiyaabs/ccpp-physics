@@ -3911,6 +3911,35 @@ c
       endif ! (.not.hwrf_samfdeep)
 
       ten_t = (new_t1 - t1)/delt
+!     water tracers: the explicit convective transport can move more
+!     than a layer's mass per step (Courant number > 1), which makes
+!     tracer compositions unstable (the model vapour is held by
+!     saturation, tracers are not). Each vapour tracer's ratio to the
+!     model vapour is kept within the range it had in the column
+!     before the scheme: exact for the bulk set (ratio 1), bounded for tags.
+      if (wtag) then
+        do m = 1, wtr_nset
+          kv = wkv(m) + 2
+          do i = 1, im
+            if (cnvflg(i)) then
+              wrm = huge(1.0_kind_phys)
+              wql = -huge(1.0_kind_phys)
+              do k = 1, ktcon(i)
+                if (q1(i,k) > 0.) then
+                  wrm = min(wrm, qtr(i,k,kv)/q1(i,k))
+                  wql = max(wql, qtr(i,k,kv)/q1(i,k))
+                endif
+              enddo
+              do k = 1, ktcon(i)
+                if (new_q1(i,k) > 0. .and. wql >= wrm) then
+                  new_qtr(i,k,kv) = new_q1(i,k) * min(wql, max(wrm,
+     &                              new_qtr(i,k,kv)/new_q1(i,k)))
+                endif
+              enddo
+            endif
+          enddo
+        enddo
+      endif
       ten_q(:,:,1) = (new_q1 - q1)/delt
       ten_u = (new_u1 - u1)/delt 
       ten_v = (new_v1 - v1)/delt

@@ -28,7 +28,7 @@ module water_tracers_utils
   implicit none
   private
 
-  public :: wtr_transfer, wtr_alpha
+  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment
   public :: wtr_proc_none, wtr_proc_cond_liq, wtr_proc_dep_ice, wtr_proc_evap_liq, &
             wtr_proc_subl_ice, wtr_proc_freeze, wtr_proc_melt, wtr_proc_sfc_evap,   &
             wtr_proc_seaice_growth
@@ -65,6 +65,83 @@ contains
     src_trc = src_trc - dtrc
     if (present(dst_trc)) dst_trc = dst_trc + dtrc
   end subroutine wtr_transfer
+
+  !> Two-way exchange between stores a and b of model water dq (> 0: a -> b, < 0: b -> a),
+  !! with the fractionation factor of each direction (one fractionating process).
+  elemental subroutine wtr_exchange(qa, ta, qb, tb, dq, alpha_ab, alpha_ba)
+    real(kind_phys), intent(in)    :: qa, qb             !< model water in a and b, before the exchange
+    real(kind_phys), intent(inout) :: ta, tb             !< tracer in a and b
+    real(kind_phys), intent(in)    :: dq                 !< model water moved from a to b (signed)
+    real(kind_phys), intent(in)    :: alpha_ab, alpha_ba !< fractionation factors a -> b and b -> a
+
+    if (dq > 0.0_kind_phys) then
+      call wtr_transfer(qa, ta, dq, tb, alpha_ab)
+    else if (dq < 0.0_kind_phys) then
+      call wtr_transfer(qb, tb, -dq, ta, alpha_ba)
+    end if
+  end subroutine wtr_exchange
+
+  !> Net change of n stores at one point after a list of non-fractionating steps.
+  !! Stores that lose water give tracer at their own ratio into a common pool; the gains,
+  !! up to the water lost, share the pool. Gains beyond the water lost (water created by
+  !! the model, e.g. a floor) get the ratio rdef; pool water not regained is removed.
+  pure subroutine wtr_net(n, q0, dq, trc, rdef)
+    integer,         intent(in)    :: n
+    real(kind_phys), intent(in)    :: q0(n)   !< model water before the steps
+    real(kind_phys), intent(in)    :: dq(n)   !< model net change over the steps
+    real(kind_phys), intent(inout) :: trc(n)  !< tracer
+    real(kind_phys), intent(in)    :: rdef    !< tracer/model ratio for created water
+    real(kind_phys) :: lost, gain, pool, fpool
+    integer :: p
+
+    lost = 0.0_kind_phys
+    gain = 0.0_kind_phys
+    pool = 0.0_kind_phys
+    do p = 1, n
+      if (dq(p) < 0.0_kind_phys) then
+        lost = lost - dq(p)
+        call wtr_transfer(q0(p), trc(p), -dq(p), pool)
+      else
+        gain = gain + dq(p)
+      end if
+    end do
+    if (gain <= 0.0_kind_phys) return
+    fpool = min(lost, gain) / gain        ! part of each gain that comes from the pool
+    do p = 1, n
+      if (dq(p) > 0.0_kind_phys) then
+        trc(p) = trc(p) + dq(p) * (1.0_kind_phys - fpool) * rdef
+        if (lost > 0.0_kind_phys) trc(p) = trc(p) + dq(p) * fpool * pool / lost
+      end if
+    end do
+  end subroutine wtr_net
+
+  !> Net sedimentation of one species in a column (index 1 = bottom, nk = top), from the
+  !! model profiles before and after (all sub-steps together, no fractionation). The flux
+  !! out of the bottom of each level is rebuilt from the model mass budget, top down, and
+  !! carries the tracer ratio of the level's water plus the inflow from above.
+  pure subroutine wtr_sediment(nk, w, q0, q1, trc, sfc)
+    integer,         intent(in)    :: nk
+    real(kind_phys), intent(in)    :: w(nk)   !< mass weight of each level (e.g. rho*dz)
+    real(kind_phys), intent(in)    :: q0(nk)  !< model mixing ratio before sedimentation
+    real(kind_phys), intent(in)    :: q1(nk)  !< model mixing ratio after sedimentation
+    real(kind_phys), intent(inout) :: trc(nk) !< tracer mixing ratio
+    real(kind_phys), intent(out)   :: sfc     !< tracer mass reaching the surface (weight units)
+    real(kind_phys) :: fin, tin, mix, tmix, fout
+    integer :: k
+
+    fin = 0.0_kind_phys
+    tin = 0.0_kind_phys
+    do k = nk, 1, -1
+      mix  = q0(k)*w(k) + fin
+      tmix = trc(k)*w(k) + tin
+      fout = mix - q1(k)*w(k)
+      tin  = 0.0_kind_phys
+      call wtr_transfer(mix, tmix, fout, tin)
+      trc(k) = tmix / w(k)
+      fin = max(fout, 0.0_kind_phys)
+    end do
+    sfc = tin
+  end subroutine wtr_sediment
 
   !> Fractionation factor of a process for a species, at temperature temp (K).
   !! 1 for H2O (bulk and tags) and, for now, for all species and processes.

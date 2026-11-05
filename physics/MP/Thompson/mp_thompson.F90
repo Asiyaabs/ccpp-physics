@@ -386,7 +386,11 @@ module mp_thompson
                               is_initialized, fs_fac_rain, fs_fac_snow, &
                               ten_q, dspechum, dqc, dqr,           &
                               dqi, dqs, dqg, dni, dnr, dnc, dnwfa, &
-                              dnifa, dtgrs, ten_u, ten_v, errmsg, errflg)
+                              dnifa, dtgrs, ten_u, ten_v,          &
+                              tagging, wtr_nset, wtr_nphase,       &
+                              wtr_idx, wtr_species, gq0,           &
+                              wtr_rainmp, wtr_snowmp,              &
+                              errmsg, errflg)
 
          implicit none
 
@@ -465,6 +469,15 @@ module mp_thompson
          real(kind_phys), optional, intent(  out) :: dnwfa(:,:)
          real(kind_phys), optional, intent(  out) :: dnifa(:,:)
          real(kind_phys),           intent(  out) :: dtgrs(:,:)
+         ! Water tracers: moved by the microphysics in module_mp_thompson as
+         ! mixing ratios, like the model water; tendencies go to ten_q
+         logical,                   intent(in   ) :: tagging
+         integer,                   intent(in   ) :: wtr_nset, wtr_nphase
+         integer,                   intent(in   ) :: wtr_idx(:,:), wtr_species(:)
+         real(kind_phys),           intent(in   ) :: gq0(:,:,:)
+         real(kind_phys),           intent(inout) :: wtr_rainmp(:,:), wtr_snowmp(:,:)
+         real(kind_phys) :: wq(ncol,nlev,6,wtr_nset), wppt(ncol,2,wtr_nset)
+         integer :: m, p
          
          ! CCPP error handling
          character(len=*),          intent(  out) :: errmsg
@@ -689,6 +702,15 @@ module mp_thompson
          ! was using these arrays, but it is somewhat dangerous.
          qv = new_spechum/(1.0_kind_phys-new_spechum)
 
+         ! Water tracers to mixing ratio like the model water
+         do m = 1, wtr_nset
+           do p = 1, 6
+             wq(:,:,p,m) = gq0(:,:,wtr_idx(m,p))
+             if (p == 1 .or. convert_dry_rho)                                &
+               wq(:,:,p,m) = wq(:,:,p,m)/(1.0_kind_phys-new_spechum)
+           end do
+         end do
+
          if (convert_dry_rho) then
            new_qc = new_qc/(1.0_kind_phys-new_spechum)
            new_qr = new_qr/(1.0_kind_phys-new_spechum)
@@ -848,7 +870,9 @@ module mp_thompson
                               qvten3=qvten3, qrten3=qrten3, qsten3=qsten3, qgten3=qgten3,    &
                               qiten3=qiten3, niten3=niten3, nrten3=nrten3, ncten3=ncten3,    &
                               qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
-                              fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow)
+                              fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
+                              wtr_nset=wtr_nset, wtr_species=wtr_species,    &
+                              wtr_q=wq, wtr_ppt=wppt)
          else if (merra2_aerosol_aware) then
              call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                                nc=new_nc, nwfa=new_nwfa, nifa=new_nifa,                                   &
@@ -891,7 +915,9 @@ module mp_thompson
                                qvten3=qvten3, qrten3=qrten3, qsten3=qsten3, qgten3=qgten3,    &
                                qiten3=qiten3, niten3=niten3, nrten3=nrten3, ncten3=ncten3,    &
                                qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
-                               fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow)
+                               fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
+                              wtr_nset=wtr_nset, wtr_species=wtr_species,    &
+                              wtr_q=wq, wtr_ppt=wppt)
          else
             call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                               tt=new_tgrs, p=prsl, w=w, dz=dz, dt_in=dtstep, dt_inner=dt_inner,  &
@@ -932,7 +958,9 @@ module mp_thompson
                               qvten3=qvten3, qrten3=qrten3, qsten3=qsten3, qgten3=qgten3,    &
                               qiten3=qiten3, niten3=niten3, nrten3=nrten3, ncten3=ncten3,    &
                               qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
-                              fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow)
+                              fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
+                              wtr_nset=wtr_nset, wtr_species=wtr_species,    &
+                              wtr_q=wq, wtr_ppt=wppt)
          end if
          if (errflg/=0) return
 
@@ -967,6 +995,17 @@ module mp_thompson
          ice     = ice     + max(0.0, delta_ice_mp/1000.0_kind_phys)
          snow    = snow    + max(0.0, delta_snow_mp/1000.0_kind_phys)
          rain    = rain    + max(0.0, (delta_rain_mp - (delta_graupel_mp + delta_ice_mp + delta_snow_mp))/1000.0_kind_phys)
+
+         ! Water tracers: precipitation (m), back to specific amounts, tendencies
+         do m = 1, wtr_nset
+           wtr_rainmp(:,m) = wtr_rainmp(:,m) + max(0.0, wppt(:,1,m)/1000.0_kind_phys)
+           wtr_snowmp(:,m) = wtr_snowmp(:,m) + max(0.0, wppt(:,2,m)/1000.0_kind_phys)
+           do p = 1, 6
+             if (p == 1 .or. convert_dry_rho)                                &
+               wq(:,:,p,m) = wq(:,:,p,m)/(1.0_kind_phys+qv)
+             ten_q(:,:,wtr_idx(m,p)) = (wq(:,:,p,m) - gq0(:,:,wtr_idx(m,p)))/dtp
+           end do
+         end do
 
          ! Recompute sr at last subcycling step
          if (nsteps>1 .and. istep == nsteps) then

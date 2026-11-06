@@ -28,7 +28,7 @@ module water_tracers_utils
   implicit none
   private
 
-  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment
+  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit
   public :: wtr_proc_none, wtr_proc_cond_liq, wtr_proc_dep_ice, wtr_proc_evap_liq, &
             wtr_proc_subl_ice, wtr_proc_freeze, wtr_proc_melt, wtr_proc_sfc_evap,   &
             wtr_proc_seaice_growth
@@ -59,8 +59,12 @@ contains
 
     if (dq <= 0.0_kind_phys .or. src_q <= 0.0_kind_phys .or. src_trc <= 0.0_kind_phys) return
 
-    dtrc = min(dq / src_q, 1.0_kind_phys) * src_trc
-    if (present(alpha)) dtrc = min(alpha * dtrc, src_trc)
+    ! Not capped at the source: where the model takes more than a store holds (driving it
+    ! negative, e.g. a cloud top where the saturation value used by the scheme is < 0),
+    ! the tracer follows at the same ratio, so a bulk set stays equal to the model water.
+    ! (Isotopes, alpha /= 1: to be revisited.)
+    dtrc = (dq / src_q) * src_trc
+    if (present(alpha)) dtrc = alpha * dtrc
 
     src_trc = src_trc - dtrc
     if (present(dst_trc)) dst_trc = dst_trc + dtrc
@@ -142,6 +146,31 @@ contains
     end do
     sfc = tin
   end subroutine wtr_sediment
+
+  !> Keep the tracer/model ratio of a column after a scheme within the range it had before
+  !! the scheme (levels with model water > 0). For explicit transports that can move more
+  !! than a layer's mass per step: exact for a bulk set (ratio 1), bounded for tags.
+  pure subroutine wtr_ratio_limit(n, q0, t0, q1, t1)
+    integer,         intent(in)    :: n
+    real(kind_phys), intent(in)    :: q0(n), t0(n)  !< model water and tracer before the scheme
+    real(kind_phys), intent(in)    :: q1(n)         !< model water after the scheme
+    real(kind_phys), intent(inout) :: t1(n)         !< tracer after the scheme
+    real(kind_phys) :: rmin, rmax
+    integer :: k
+
+    rmin =  huge(1.0_kind_phys)
+    rmax = -huge(1.0_kind_phys)
+    do k = 1, n
+      if (q0(k) > 0.0_kind_phys) then
+        rmin = min(rmin, t0(k)/q0(k))
+        rmax = max(rmax, t0(k)/q0(k))
+      end if
+    end do
+    if (rmax < rmin) return
+    do k = 1, n
+      if (q1(k) > 0.0_kind_phys) t1(k) = q1(k) * min(rmax, max(rmin, t1(k)/q1(k)))
+    end do
+  end subroutine wtr_ratio_limit
 
   !> Fractionation factor of a process for a species, at temperature temp (K).
   !! 1 for H2O (bulk and tags) and, for now, for all species and processes.

@@ -94,7 +94,7 @@
       use machine , only : kind_phys
       use funcphys , only : fpvs
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
-     &     wtr_proc_cond_liq, wtr_proc_evap_liq
+     &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_ratio_limit
 
       implicit none
 !
@@ -814,7 +814,8 @@ c
       enddo
       endif
 !     water tracers: vapour tracers on interface levels in proportion
-!     to the model vapour qo (tracer/model ratio of the layer qo uses)
+!     to the model vapour qo (tracer/model ratio of the layer qo uses;
+!     where that layer's vapour is <= 0, the model's increment qo - q1)
       if (wtag) then
         do m = 1, wtr_nset
           kv = wkv(m)
@@ -822,8 +823,11 @@ c
             do i = 1, im
               if (k <= kmax(i)) then
                 kq = min(k+1, kmax(i))
-                if (q1(i,kq) > 0.)
-     &            ctro(i,k,kv) = qo(i,k) * ctr(i,kq,kv) / q1(i,kq)
+                if (q1(i,kq) > 0.) then
+                  ctro(i,k,kv) = qo(i,k) * ctr(i,kq,kv) / q1(i,kq)
+                else
+                  ctro(i,k,kv) = ctr(i,kq,kv) + (qo(i,k) - q1(i,kq))
+                endif
               endif
             enddo
           enddo
@@ -3911,32 +3915,16 @@ c
       endif ! (.not.hwrf_samfdeep)
 
       ten_t = (new_t1 - t1)/delt
-!     water tracers: the explicit convective transport can move more
-!     than a layer's mass per step (Courant number > 1), which makes
-!     tracer compositions unstable (the model vapour is held by
-!     saturation, tracers are not). Each vapour tracer's ratio to the
-!     model vapour is kept within the range it had in the column
-!     before the scheme: exact for the bulk set (ratio 1), bounded for tags.
+!     water tracers: the explicit transport can move more than a
+!     layer's mass per step, which makes tracer compositions unstable;
+!     keep each vapour tracer's ratio to the model vapour in range
       if (wtag) then
         do m = 1, wtr_nset
           kv = wkv(m) + 2
           do i = 1, im
-            if (cnvflg(i)) then
-              wrm = huge(1.0_kind_phys)
-              wql = -huge(1.0_kind_phys)
-              do k = 1, ktcon(i)
-                if (q1(i,k) > 0.) then
-                  wrm = min(wrm, qtr(i,k,kv)/q1(i,k))
-                  wql = max(wql, qtr(i,k,kv)/q1(i,k))
-                endif
-              enddo
-              do k = 1, ktcon(i)
-                if (new_q1(i,k) > 0. .and. wql >= wrm) then
-                  new_qtr(i,k,kv) = new_q1(i,k) * min(wql, max(wrm,
-     &                              new_qtr(i,k,kv)/new_q1(i,k)))
-                endif
-              enddo
-            endif
+            if (cnvflg(i)) call wtr_ratio_limit(ktcon(i),
+     &         q1(i,1:ktcon(i)), qtr(i,1:ktcon(i),kv),
+     &         new_q1(i,1:ktcon(i)), new_qtr(i,1:ktcon(i),kv))
           enddo
         enddo
       endif

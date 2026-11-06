@@ -5,6 +5,8 @@ module GFS_photochemistry
   use machine,        only: kind_phys
   use module_ozphys,  only: ty_ozphys
   use module_h2ophys, only: ty_h2ophys
+  use water_tracers_config, only: wtr_kind_bulk
+  use water_tracers_utils,  only: wtr_transfer
   implicit none
 contains
 
@@ -47,7 +49,8 @@ contains
 ! #########################################################################################
   subroutine GFS_photochemistry_run (dtp, ntqv, ntoz, im, levs, ozphys, oz_phys_2015, oz_phys_2006, con_1ovg,   &
        prsl, dp, ozpl, h2o_phys, h2ophys, h2opl, gq0, gt0, ten_q, ten_u, ten_v, ten_t, do3_dt_prd, do3_dt_ozmx, &
-       do3_dt_temp, do3_dt_ohoz, dqv_dt_prd, dqv_dt_qvmx, errmsg, errflg)
+       do3_dt_temp, do3_dt_ohoz, dqv_dt_prd, dqv_dt_qvmx,                                         &
+       tagging, wtr_nset, wtr_idx, wtr_kind, wtr_tag_moisten, errmsg, errflg)
     
     ! Inputs
     real(kind=kind_phys), intent(in) :: &
@@ -95,8 +98,14 @@ contains
     integer,  intent(out) :: &
          errflg          ! CCPP Error flag.
     
+    ! Water tracers
+    logical, intent(in) :: tagging, wtr_tag_moisten
+    integer, intent(in) :: wtr_nset, wtr_idx(:,:), wtr_kind(:)
+
     ! Locals
-    integer :: i,k
+    integer :: i,k,m
+    real(kind=kind_phys) :: wtrc
+    real(kind=kind_phys), dimension(im,levs) :: wsrc, wf
     real(kind=kind_phys), dimension(im,levs) :: &
          init_oz0,  oz0,          & ! initial and updated local ozone concentration
          init_h2o0, h2o0            ! initial and updated local h2o concentration
@@ -140,6 +149,30 @@ contains
            ten_q(i,k,ntqv) = (h2o0(i,k) - init_h2o0(i,k))/dtp
          end do
        end do
+       ! Water tracers: h2o_new = h2o*f + S. The source S (production and climatology) is
+       ! the result for h2o = 0, f + S the result for h2o = 1. Every set keeps the fraction f
+       ! of its vapour (a loss at its own ratio, like wtr_transfer, also right for h2o < 0).
+       ! S is chemistry water: bulk sets get it, tags only in test mode (wtr_tag_moisten).
+       if (tagging) then
+         wsrc = 0.0_kind_phys
+         call h2ophys%run(dtp, prsl, h2opl, wsrc)
+         wf = 1.0_kind_phys
+         call h2ophys%run(dtp, prsl, h2opl, wf)
+         wf = wf - wsrc
+         do m = 1, wtr_nset
+           do k = 1, levs
+             do i = 1, im
+               wtrc = gq0(i,k,wtr_idx(m,1)) * wf(i,k)
+               if (wsrc(i,k) > 0.0_kind_phys) then
+                 if (wtr_kind(m) == wtr_kind_bulk .or. wtr_tag_moisten) wtrc = wtrc + wsrc(i,k)
+               else
+                 call wtr_transfer(h2o0(i,k) - wsrc(i,k), wtrc, -wsrc(i,k))
+               end if
+               ten_q(i,k,wtr_idx(m,1)) = (wtrc - gq0(i,k,wtr_idx(m,1)))/dtp
+             end do
+           end do
+         end do
+       end if
     endif
 
   end subroutine GFS_photochemistry_run

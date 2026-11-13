@@ -88,13 +88,15 @@
      &    betascu,lbb1,lbb2,lbb3,dt_decay,maxMF,do_mynnedmf,            &
      &    sigmab_coldstart,cat_adj_deep,                                &
      &    tagging,wtr_nset,wtr_nphase,wtr_idx,wtr_species,otsptflag,    &
-     &    wtr_raincd,errmsg,errflg)
+     &    wtr_kind,wtr_raincd,errmsg,errflg)
 
 !
       use machine , only : kind_phys
       use funcphys , only : fpvs
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
-     &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_ratio_limit
+     &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_ratio_limit,
+     &     wtr_col_ratio
+      use water_tracers_config, only : wtr_kind_bulk
 
       implicit none
 !
@@ -146,10 +148,11 @@
 !     like the model condensate
       logical, intent(in) :: tagging, otsptflag(:)
       integer, intent(in) :: wtr_nset, wtr_nphase, wtr_idx(:,:),        &
-     &                       wtr_species(:)
+     &                       wtr_species(:), wtr_kind(:)
       real(kind_phys), intent(out) :: wtr_raincd(:,:)
       logical wtag
       integer m, kv, kq, wkv(wtr_nset)
+      real(kind=kind_phys) wrc(im,wtr_nset)
       real(kind=kind_phys) wrt(im,km,wtr_nset), wrn(im,wtr_nset),       &
      &     wqcd(im,km,wtr_nset), wpwdo(im,km,wtr_nset),                 &
      &     wpwav(im,wtr_nset), wrm, wql, wev, wdl, wdi, wtmp
@@ -815,10 +818,17 @@ c
       endif
 !     water tracers: vapour tracers on interface levels in proportion
 !     to the model vapour qo (tracer/model ratio of the layer qo uses;
-!     where that layer's vapour is <= 0, the model's increment qo - q1)
+!     where that layer's vapour is <= 0, the model creates qo - q1:
+!     it gets the column ratio wrc, also used below for water the
+!     model takes from an updraft parcel that holds <= 0)
       if (wtag) then
         do m = 1, wtr_nset
           kv = wkv(m)
+          do i = 1, im
+            wrc(i,m) = wtr_col_ratio(q1(i,1:kmax(i)),
+     &        ctr(i,1:kmax(i),kv), merge(1._kind_phys, 0._kind_phys,
+     &        wtr_kind(m) == wtr_kind_bulk))
+          enddo
           do k = 1, km1
             do i = 1, im
               if (k <= kmax(i)) then
@@ -826,7 +836,8 @@ c
                 if (q1(i,kq) > 0.) then
                   ctro(i,k,kv) = qo(i,k) * ctr(i,kq,kv) / q1(i,kq)
                 else
-                  ctro(i,k,kv) = ctr(i,kq,kv) + (qo(i,k) - q1(i,kq))
+                  ctro(i,k,kv) = ctr(i,kq,kv)
+     &                         + (qo(i,k) - q1(i,kq)) * wrc(i,m)
                 endif
               endif
             enddo
@@ -2076,7 +2087,7 @@ c
                   wql = 0.
                   call wtr_transfer(qrcko(i,k), ecko(i,k,kv), wrm, wql,
      &                 wtr_alpha(wtr_species(m), wtr_proc_cond_liq,
-     &                 to(i,k)))
+     &                 to(i,k)), wrc(i,m))
                   if (wrm > 0.) wrt(i,k,m) = wql / wrm
                   wpwav(i,m) = wpwav(i,m) + pwo(i,k) * wrt(i,k,m)
                 endif
@@ -2089,7 +2100,7 @@ c
               wql = 0.
               call wtr_transfer(qcko(i,k)+qlko_ktcon(i), ecko(i,k,kv),
      &             qlko_ktcon(i), wql, wtr_alpha(wtr_species(m),
-     &             wtr_proc_cond_liq, to(i,k)))
+     &             wtr_proc_cond_liq, to(i,k)), wrc(i,m))
               wrt(i,ktcon(i),m) = wql / qlko_ktcon(i)
             endif
           enddo

@@ -28,7 +28,8 @@ module water_tracers_utils
   implicit none
   private
 
-  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit
+  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit, &
+            wtr_col_ratio
   public :: wtr_proc_none, wtr_proc_cond_liq, wtr_proc_dep_ice, wtr_proc_evap_liq, &
             wtr_proc_subl_ice, wtr_proc_freeze, wtr_proc_melt, wtr_proc_sfc_evap,   &
             wtr_proc_seaice_growth
@@ -48,23 +49,40 @@ contains
 
   !> Move the tracer share of a model-water transfer dq from a source store to a
   !! destination store (or out of the atmosphere if dst_trc is absent).
-  elemental subroutine wtr_transfer(src_q, src_trc, dq, dst_trc, alpha)
+  elemental subroutine wtr_transfer(src_q, src_trc, dq, dst_trc, alpha, rdef)
     real(kind_phys), intent(in)              :: src_q    !< model water in the source store, before the transfer
     real(kind_phys), intent(inout)           :: src_trc  !< tracer in the source store
     real(kind_phys), intent(in)              :: dq       !< model water moved out of the source (>= 0)
     real(kind_phys), intent(inout), optional :: dst_trc  !< tracer in the destination store
     real(kind_phys), intent(in),    optional :: alpha    !< fractionation factor (default 1)
+    real(kind_phys), intent(in),    optional :: rdef     !< tracer/model ratio of water the model takes
+                                                         !! beyond what the source holds (wtr_col_ratio)
 
     real(kind_phys) :: dtrc
 
-    if (dq <= 0.0_kind_phys .or. src_q <= 0.0_kind_phys .or. src_trc <= 0.0_kind_phys) return
+    if (dq <= 0.0_kind_phys) return
 
-    ! Not capped at the source: where the model takes more than a store holds (driving it
-    ! negative, e.g. a cloud top where the saturation value used by the scheme is < 0),
-    ! the tracer follows at the same ratio, so a bulk set stays equal to the model water.
-    ! (Isotopes, alpha /= 1: to be revisited.)
-    dtrc = (dq / src_q) * src_trc
-    if (present(alpha)) dtrc = alpha * dtrc
+    if (present(rdef) .and. dq > max(src_q, 0.0_kind_phys)) then
+      ! The model takes more than the source holds (e.g. a cloud top where the parcel water
+      ! or the saturation value is < 0), i.e. it creates the part beyond max(src_q, 0):
+      ! the source tracer gives all it holds, the created part gets the ratio rdef.
+      dtrc = (dq - max(src_q, 0.0_kind_phys)) * rdef
+      if (src_q > 0.0_kind_phys .and. src_trc > 0.0_kind_phys) then
+        if (present(alpha)) then
+          dtrc = dtrc + alpha * src_trc
+        else
+          dtrc = dtrc + src_trc
+        end if
+      end if
+    else
+      if (src_q <= 0.0_kind_phys .or. src_trc <= 0.0_kind_phys) return
+      ! Without rdef, not capped at the source: where the model takes more than a store
+      ! holds, the tracer follows at the source ratio (amplifies small tracer/model
+      ! mismatches when the store is nearly empty; callers where this happens pass rdef).
+      ! (Isotopes, alpha /= 1: to be revisited.)
+      dtrc = (dq / src_q) * src_trc
+      if (present(alpha)) dtrc = alpha * dtrc
+    end if
 
     src_trc = src_trc - dtrc
     if (present(dst_trc)) dst_trc = dst_trc + dtrc
@@ -171,6 +189,20 @@ contains
       if (q1(k) > 0.0_kind_phys) t1(k) = q1(k) * min(rmax, max(rmin, t1(k)/q1(k)))
     end do
   end subroutine wtr_ratio_limit
+
+  !> Tracer/model ratio of a column (levels with model water > 0), for water the model
+  !! creates where there is no ratio to follow (rdef of wtr_transfer). rdef here: the value
+  !! when no level has water (1 for a bulk set, 0 for a tag).
+  pure real(kind_phys) function wtr_col_ratio(q, t, rdef)
+    real(kind_phys), intent(in) :: q(:), t(:)  !< model water and tracer of the column
+    real(kind_phys), intent(in) :: rdef
+
+    if (any(q > 0.0_kind_phys)) then
+      wtr_col_ratio = sum(t, mask = q > 0.0_kind_phys) / sum(q, mask = q > 0.0_kind_phys)
+    else
+      wtr_col_ratio = rdef
+    end if
+  end function wtr_col_ratio
 
   !> Fractionation factor of a process for a species, at temperature temp (K).
   !! 1 for H2O (bulk and tags) and, for now, for all species and processes.

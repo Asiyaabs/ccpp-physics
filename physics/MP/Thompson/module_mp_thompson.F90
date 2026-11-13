@@ -1942,7 +1942,8 @@ module module_mp_thompson
       use water_tracers_utils, only: wtr_transfer, wtr_exchange, wtr_net, &
                                      wtr_sediment, wtr_alpha,             &
                                      wtr_proc_cond_liq, wtr_proc_evap_liq,&
-                                     wtr_proc_dep_ice, wtr_proc_subl_ice
+                                     wtr_proc_dep_ice, wtr_proc_subl_ice, &
+                                     wtr_col_ratio
 
       implicit none
 
@@ -2115,15 +2116,14 @@ module module_mp_thompson
 !+---+-----------------------------------------------------------------+
 
 !..water tracers: model water on entry; column vapour ratio of each set
-!.. (given to water the model creates, e.g. by a floor)
+!.. (levels with vapour > 0; given to water the model creates, e.g. by a floor)
       if (size(wq,3) > 0) then
          wppt = 0.
          do k = kts, kte
             wq0(k,:) = (/qv1d(k), qc1d(k), qi1d(k), qr1d(k), qs1d(k), qg1d(k)/)
          enddo
          do m = 1, size(wq,3)
-            wrv(m) = 1.
-            if (sum(qv1d) > 0.) wrv(m) = sum(wq(:,1,m)) / sum(qv1d)
+            wrv(m) = wtr_col_ratio(qv1d, wq(:,1,m), 1.0_wp)
          enddo
       endif
 

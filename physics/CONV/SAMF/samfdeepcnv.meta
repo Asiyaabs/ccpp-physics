@@ -2,7 +2,7 @@
   name = samfdeepcnv
   type = scheme
   dependencies = ../../tools/funcphys.f90,../../hooks/machine.F,samfaerosols.F,../progsigma_calc.f90,../progomega_calc.f90
-  dependencies = ../../tools/water_tracers_utils.F90
+  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]
@@ -892,6 +892,13 @@
   units = flag
   dimensions = (number_of_tracers)
   type = logical
+  intent = in
+[wtr_kind]
+  standard_name = kind_of_water_tracer_sets
+  long_name = kind of each water tracer set (1 bulk, 2 tag)
+  units = index
+  dimensions = (number_of_water_tracer_sets)
+  type = integer
   intent = in
 [wtr_raincd]
   standard_name = lwe_thickness_of_deep_convective_precipitation_amount_of_water_tracers

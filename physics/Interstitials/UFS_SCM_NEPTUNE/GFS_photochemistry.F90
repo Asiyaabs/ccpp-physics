@@ -50,7 +50,7 @@ contains
   subroutine GFS_photochemistry_run (dtp, ntqv, ntoz, im, levs, ozphys, oz_phys_2015, oz_phys_2006, con_1ovg,   &
        prsl, dp, ozpl, h2o_phys, h2ophys, h2opl, gq0, gt0, ten_q, ten_u, ten_v, ten_t, do3_dt_prd, do3_dt_ozmx, &
        do3_dt_temp, do3_dt_ohoz, dqv_dt_prd, dqv_dt_qvmx,                                         &
-       tagging, wtr_nset, wtr_idx, wtr_kind, wtr_tag_moisten, errmsg, errflg)
+       tagging, wtr_nset, wtr_idx, wtr_kind, wtr_tag_moisten, wtr_tag_frac, errmsg, errflg)
     
     ! Inputs
     real(kind=kind_phys), intent(in) :: &
@@ -101,6 +101,7 @@ contains
     ! Water tracers
     logical, intent(in) :: tagging, wtr_tag_moisten
     integer, intent(in) :: wtr_nset, wtr_idx(:,:), wtr_kind(:)
+    real(kind=kind_phys), intent(in) :: wtr_tag_frac
 
     ! Locals
     integer :: i,k,m
@@ -164,7 +165,11 @@ contains
              do i = 1, im
                wtrc = gq0(i,k,wtr_idx(m,1)) * wf(i,k)
                if (wsrc(i,k) > 0.0_kind_phys) then
-                 if (wtr_kind(m) == wtr_kind_bulk .or. wtr_tag_moisten) wtrc = wtrc + wsrc(i,k)
+                 if (wtr_kind(m) == wtr_kind_bulk) then
+                   wtrc = wtrc + wsrc(i,k)
+                 else if (wtr_tag_moisten) then
+                   wtrc = wtrc + wsrc(i,k)*wtr_tag_frac
+                 end if
                else
                  call wtr_transfer(h2o0(i,k) - wsrc(i,k), wtrc, -wsrc(i,k))
                end if

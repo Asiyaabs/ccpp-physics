@@ -103,6 +103,7 @@
      &     index_of_y_wind,index_of_process_pbl,gen_tend,ldiag3d,       &
      &     ten_t, ten_u, ten_v,                                         &
      &     tagging,wtr_nset,wtr_nphase,wtr_kind,wtr_species,wtr_qflx,   &
+     &     wtr_tag_frac,                                                &
      &     errmsg,errflg)
 
 !
@@ -178,6 +179,7 @@
       integer, intent(in) :: wtr_nset, wtr_nphase, wtr_kind(:),         &
      &                       wtr_species(:)
       real(kind=kind_phys), intent(inout) :: wtr_qflx(:,:)
+      real(kind=kind_phys), intent(in) :: wtr_tag_frac
       integer :: iwv, iwl
       real(kind=kind_phys) :: wflx, wqt, wqm0, wqm1, wtrc, wdql, wdqr
       real(kind=kind_phys) :: wqv(im,km), wql0(im,km)
@@ -2537,6 +2539,8 @@ c
           do i = 1, im
             if (evap(i) >= 0. .or. wtr_kind(n) == wtr_kind_bulk) then
               wflx = evap(i)
+              if (wtr_kind(n) /= wtr_kind_bulk)
+     &          wflx = evap(i)*wtr_tag_frac
               f2(i,1+is) = q1(i,1,iwv) + dtdz1(i) * wflx
             else
               wtrc = q1(i,1,iwv)

@@ -299,6 +299,14 @@
   dimensions = ()
   type = logical
   intent = in
+[wtr_tag_frac]
+  standard_name = fraction_of_water_sources_given_to_water_tracer_tags
+  long_name = share of the water sources that tags get (1; wtr_init_frac in the fraction test)
+  units = frac
+  dimensions = ()
+  type = real
+  kind = kind_phys
+  intent = in
 [errmsg]
   standard_name = ccpp_error_message
   long_name = error message for error handling in CCPP

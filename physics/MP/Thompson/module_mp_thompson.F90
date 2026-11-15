@@ -1047,6 +1047,7 @@ module module_mp_thompson
                               fs_fac_rain, fs_fac_snow,               &
                               wtr_nset, wtr_species, wtr_q, wtr_ppt)
 
+         use water_tracers_utils, only: wtr_col_ratio
          implicit none
 
 !..Subroutine arguments
@@ -1659,8 +1660,7 @@ module module_mp_thompson
                      endif
 !..water tracers: the vapour created here gets the column vapour ratio
                      do m = 1, wtr_nset
-                        wrat(m) = 1.
-                        if (sum(qv1d) > 0.) wrat(m) = sum(wq1d(:,1,m))/sum(qv1d)
+                        wrat(m) = wtr_col_ratio(qv1d, wq1d(:,1,m), 1.0_wp)
                         wtr_q(i,k,j,1,m) = wtr_q(i,k,j,1,m)                &
                                          + (qv(i,k,j) - qv1d(k))*wrat(m)
                      enddo

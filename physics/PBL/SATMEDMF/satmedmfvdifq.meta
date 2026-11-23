@@ -2,7 +2,7 @@
   name = satmedmfvdifq
   type = scheme
   dependencies = ../../tools/funcphys.f90,../../tools/canopy_utils_mod.f,../../hooks/machine.F,../mfpbltq.f,mfscuq.f,../tridi.f
-  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_tracers_utils.F90
+  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_isotopes.F90,../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]

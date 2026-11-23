@@ -4,7 +4,7 @@
   type = scheme
   dependencies = ../../hooks/machine.F,../../photochem/module_ozphys.F90
   dependencies = ../../photochem/module_h2ophys.F90
-  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_tracers_utils.F90
+  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_isotopes.F90,../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]

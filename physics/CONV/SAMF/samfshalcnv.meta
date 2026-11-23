@@ -2,7 +2,7 @@
   name = samfshalcnv
   type = scheme
   dependencies = ../../tools/funcphys.f90,../../hooks/machine.F,samfaerosols.F,../progsigma_calc.f90,../progomega_calc.f90
-  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_tracers_utils.F90
+  dependencies = ../../tools/water_tracers_config.F90,../../tools/water_isotopes.F90,../../tools/water_tracers_utils.F90
 
 ########################################################################
 [ccpp-arg-table]

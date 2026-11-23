@@ -109,7 +109,7 @@
 !
       use machine  , only : kind_phys
       use funcphys , only : fpvs
-      use water_tracers_config, only : wtr_kind_bulk
+      use water_tracers_config, only : wtr_kind_bulk, wtr_species_h2o
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
      &                         wtr_proc_cond_liq, wtr_proc_dep_ice
 !
@@ -2529,15 +2529,18 @@ c
 !
 !     water tracers: surface evaporation into the vapour tracer of each
 !     set (tag source 'surface': all surface evaporation is tagged).
-!     Bulk sets get evap like qv. Dew/frost (evap < 0) takes vapour
-!     from the lowest layer at its tag ratio (alpha hook).
-!     (isotopes: evaporation fractionation is applied with the surface step)
+!     The H2O bulk set gets evap like qv. Dew/frost (evap < 0) takes
+!     vapour from the lowest layer at the set's own ratio (alpha hook):
+!     tags, and isotope bulk sets (their ratio is not 1).
+!     (isotopes: upward evaporation enters at delta = 0 until the
+!     surface step adds Craig-Gordon)
       if (tagging) then
         do n = 1, wtr_nset
           iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
           is  = (iwv-1) * km
           do i = 1, im
-            if (evap(i) >= 0. .or. wtr_kind(n) == wtr_kind_bulk) then
+            if (evap(i) >= 0. .or. (wtr_kind(n) == wtr_kind_bulk
+     &          .and. wtr_species(n) == wtr_species_h2o)) then
               wflx = evap(i)
               if (wtr_kind(n) /= wtr_kind_bulk)
      &          wflx = evap(i)*wtr_tag_frac

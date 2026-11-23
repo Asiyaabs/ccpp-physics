@@ -8,7 +8,7 @@
 !!
 !!   &water_tracer_nml
 !!     tagging        = .false.   ! master switch: .true. adds the water tracers
-!!     wtr_species    = 'H2O'     ! species to track ('H2O'; 'HDO', 'H218O' later)
+!!     wtr_species    = 'H2O'     ! species to track: any of 'H2O', 'HDO', 'H218O'
 !!     wtr_tag_names  = 'COL'     ! one tag set per name (SCM: COL = the column)
 !!     wtr_tag_source = 'surface' ! where tagged water enters (per tag)
 !!     wtr_bulk_check = .true.    ! H2O bulk set, must equal the model water exactly
@@ -20,7 +20,12 @@
 !!
 !! Each set holds one tracer per water phase (qv, ql, qi, qr, qs, qg). Sets, in order:
 !! for each species: its bulk set (for H2O only if wtr_bulk_check), then one tag set per tag.
-!! Tracer names: <phase>_<species>[_<tag>], e.g. qv_H2O, qv_H2O_COL.
+!! Tracer names: <phase>_<species>[_<tag>], e.g. qv_H2O, qv_H2O_COL, qv_HDO.
+!!
+!! Isotopes (HDO, H218O) are carried as R/R_VSMOW times the water (water_isotopes: Rstd = 1):
+!! an isotope set equal to its water set has delta = 0 permil, delta = 1000 (qiso/qwater - 1).
+!! Their bulk set gets every source the H2O bulk set gets, so sources enter at delta = 0 and,
+!! as long as wtr_alpha = 1, every isotope set stays equal to the H2O set with the same tag.
 module water_tracers_config
 
   use machine, only: kind_phys
@@ -32,6 +37,7 @@ module water_tracers_config
   public :: wtr_nphase, wtr_phase_names, wtr_max_species, wtr_max_tags
   public :: wtr_species_h2o, wtr_species_hdo, wtr_species_h218o, wtr_species_names
   public :: wtr_kind_bulk, wtr_kind_tag
+  public :: wtr_h2o_twin
 
   integer,          parameter :: wtr_nphase = 6                          !< phases per set
   character(len=2), parameter :: wtr_phase_names(wtr_nphase) = (/ 'qv', 'ql', 'qi', 'qr', 'qs', 'qg' /)
@@ -180,11 +186,6 @@ contains
           errflg = 1
           return
        end if
-       if (id /= wtr_species_h2o) then
-          errmsg = 'water_tracers_config: species ' // trim(names(n)) // ' not implemented yet (only H2O)'
-          errflg = 1
-          return
-       end if
        if (any(cfg%species(1:cfg%nspecies) == id)) then
           errmsg = 'water_tracers_config: species listed twice in wtr_species: ' // trim(names(n))
           errflg = 1
@@ -322,5 +323,27 @@ contains
        end do
     end do
   end subroutine wtr_index_table
+
+  !> The H2O set that matches set m: same kind, and for a tag set the same tag (the n-th tag
+  !! set of a species matches the n-th tag set of H2O, see wtr_set_info). 0 if there is none.
+  pure integer function wtr_h2o_twin(m, set_species, set_kind)
+    integer, intent(in) :: m, set_species(:), set_kind(:)
+    integer :: j, n
+
+    n = 0
+    do j = 1, m
+      if (set_species(j) == set_species(m) .and. set_kind(j) == set_kind(m)) n = n + 1
+    end do
+    wtr_h2o_twin = 0
+    do j = 1, size(set_species)
+      if (set_species(j) == wtr_species_h2o .and. set_kind(j) == set_kind(m)) then
+        n = n - 1
+        if (n == 0) then
+          wtr_h2o_twin = j
+          return
+        end if
+      end if
+    end do
+  end function wtr_h2o_twin
 
 end module water_tracers_config

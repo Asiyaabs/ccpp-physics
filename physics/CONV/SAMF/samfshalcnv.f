@@ -67,8 +67,9 @@
       use funcphys , only : fpvs
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
      &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_ratio_limit,
-     &     wtr_col_ratio
-      use water_tracers_config, only : wtr_kind_bulk
+     &     wtr_col_ratio, wtr_cnv_substep
+      use water_tracers_config, only : wtr_kind_bulk, wtr_species_h2o,
+     &     wtr_h2o_twin
 
       implicit none
 !
@@ -116,10 +117,16 @@
      &                       wtr_species(:), wtr_kind(:)
       real(kind_phys), intent(out) :: wtr_raincs(:,:)
       logical wtag
-      integer m, kv, kq, wkv(wtr_nset)
+      integer m, kv, kq, wkv(wtr_nset), mh
       real(kind=kind_phys) wrc(im,wtr_nset)
       real(kind=kind_phys) wrt(im,km,wtr_nset), wrn(im,wtr_nset),       &
      &                     wrm, wql, wev, wdl, wdi
+!     isotopes: source tendencies before the environment term of the
+!     model vapour (wsq) and of each set's vapour (wse), rain evaporated
+!     below cloud (model wqev, sets wiev), column work arrays
+      real(kind=kind_phys) wsq(im,km), wse(im,km,wtr_nset),
+     &     wqev(im,km), wiev(im,km,wtr_nset), wxq(km), wxi(km),
+     &     wmf(km), wdp(km)
       character(len=*), intent(out) :: errmsg
       integer,          intent(out) :: errflg
 
@@ -297,6 +304,8 @@ c  cloud water
       if (wtag) then
         wrt = 0.
         wrn = 0.
+        wqev = 0.
+        wiev = 0.
         do m = 1, wtr_nset
           wkv(m) = count(otsptflag(2:wtr_idx(m,1)))
           if (.not. otsptflag(wtr_idx(m,1))) wtag = .false.
@@ -1993,6 +2002,14 @@ c
       enddo
       endif
 !
+!     isotopes: keep the source tendencies before the environment term
+      if (wtag) then
+        wsq = dellaq
+        do m = 1, wtr_nset
+          wse(:,:,m) = dellae(:,:,wkv(m))
+        enddo
+      endif
+!
 ! compute change rates due to environmental subsidence & uplift
 !     using a positive definite TVD flux-limiter scheme
 !
@@ -2572,6 +2589,7 @@ c
                 new_t1(i,k) = new_t1(i,k) - elocp * qevap(i)
 !               water tracers: rain evaporation (alpha hook)
                 if (wtag) then
+                  wqev(i,k) = wqev(i,k) + qevap(i)
                   do m = 1, wtr_nset
                     wev = 0.
                     call wtr_transfer(rn(i)+qevap(i)*tem, wrn(i,m),
@@ -2579,6 +2597,7 @@ c
      &                   wtr_proc_evap_liq, new_t1(i,k)))
                     new_qtr(i,k,wkv(m)+2) = new_qtr(i,k,wkv(m)+2)
      &                                    + wev / tem
+                    wiev(i,k,m) = wiev(i,k,m) + wev / tem
                   enddo
                 endif
                 deltv(i) = - elocp*qevap(i)/dt2
@@ -2777,14 +2796,73 @@ c
       ten_v = (new_v1 - v1)/delt
 !     water tracers: the explicit transport can move more than a
 !     layer's mass per step, which makes tracer compositions unstable;
-!     keep each vapour tracer's ratio to the model vapour in range
+!     keep each vapour tracer's ratio to the model vapour in range.
+!     Isotopes: the limiter only caps that noise, which for isotope
+!     ratios is far too large; their ratio is taken instead from a
+!     sub-stepped (stable) transport (wtr_cnv_substep) of the isotope
+!     and of its H2O twin with the same sources: the model vapour for
+!     an isotope bulk set, the matching H2O tag for an isotope tag (so
+!     the tag's composition is consistent with that tag). New isotope
+!     = (twin's new vapour - its rain evaporated below cloud) x ratio
+!     + the isotope's rain evaporated below cloud.
       if (wtag) then
         do m = 1, wtr_nset
+          if (wtr_species(m) /= wtr_species_h2o) cycle
           kv = wkv(m) + 2
           do i = 1, im
             if (cnvflg(i)) call wtr_ratio_limit(ktcon(i),
      &         q1(i,1:ktcon(i)), qtr(i,1:ktcon(i),kv),
      &         new_q1(i,1:ktcon(i)), new_qtr(i,1:ktcon(i),kv))
+          enddo
+        enddo
+        do m = 1, wtr_nset
+          if (wtr_species(m) == wtr_species_h2o) cycle
+          kv = wkv(m) + 2
+          mh = 0
+          if (wtr_kind(m) /= wtr_kind_bulk)
+     &      mh = wtr_h2o_twin(m, wtr_species, wtr_kind)
+          do i = 1, im
+            if (.not. cnvflg(i)) cycle
+              do k = 1, km
+                wmf(k) = 0.
+                if (k >= kb(i)) wmf(k) = eta(i,k)
+                wdp(k) = 1000. * del(i,k)
+              enddo
+              if (mh > 0) then
+                wxq = qtr(i,:,wkv(mh)+2)
+                call wtr_cnv_substep(km, ktcon(i), kb(i), 0, wmf,
+     &             eta(i,kb(i)), 0._kind_phys, wdp, grav,
+     &             xmb(i)*dt2, wse(i,:,mh), wxq)
+              else
+                wxq = q1(i,:)
+                call wtr_cnv_substep(km, ktcon(i), kb(i), 0, wmf,
+     &             eta(i,kb(i)), 0._kind_phys, wdp, grav,
+     &             xmb(i)*dt2, wsq(i,:), wxq)
+              endif
+              wxi = qtr(i,:,kv)
+              call wtr_cnv_substep(km, ktcon(i), kb(i), 0, wmf,
+     &             eta(i,kb(i)), 0._kind_phys, wdp, grav,
+     &             xmb(i)*dt2, wse(i,:,m), wxi)
+              do k = 1, ktcon(i)
+                if (mh > 0) then
+                  tem = new_qtr(i,k,wkv(mh)+2) - wiev(i,k,mh)
+                else
+                  tem = new_q1(i,k) - wqev(i,k)
+                endif
+                if (tem > 0. .and. wxq(k) > 0.) then
+                  new_qtr(i,k,kv) = tem * wxi(k) / wxq(k)
+     &                            + wiev(i,k,m)
+                else if (mh > 0) then
+                  new_qtr(i,k,kv) = wiev(i,k,m)
+                endif
+              enddo
+!     isotope tag: keep its ratio to the H2O tag within the column
+!     range before the scheme (at cloud top the sub-stepped fields are
+!     tiny and their quotient is not reliable)
+              if (mh > 0) call wtr_ratio_limit(ktcon(i),
+     &          qtr(i,1:ktcon(i),wkv(mh)+2), qtr(i,1:ktcon(i),kv),
+     &          new_qtr(i,1:ktcon(i),wkv(mh)+2),
+     &          new_qtr(i,1:ktcon(i),kv))
           enddo
         enddo
       endif

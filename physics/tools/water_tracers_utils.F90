@@ -1,13 +1,16 @@
 !> \file water_tracers_utils.F90
-!! Water tracers (tagging, later isotopes): the one helper used inside the physics schemes.
+!! Water tracers (tagging, isotopes): the one helper used inside the physics schemes.
 !!
 !! Plain Fortran module (no CCPP metadata). A scheme that moves water calls wtr_transfer once
 !! per water transfer, for every water tracer set, with the same amount of model water dq:
 !!
-!!   moved tracer = alpha * (src_trc / src_q) * dq
+!!   moved tracer = alpha * (src_trc / src_q) * dq          (alpha = 1: exactly this)
 !!
 !! i.e. the tracer leaves the source store at the source ratio (tracer/model water), times
 !! the fractionation factor alpha of that process (1 for H2O and tags; wtr_alpha below).
+!! For alpha /= 1 (isotopes) the moved water is in equilibrium with the water left in the
+!! source (closed-system step), which is the formula above for small dq/src_q and never
+!! moves more tracer than the source holds.
 !!
 !! Usage, e.g. condensation of vapour to cloud water (dq > 0) for set s:
 !!
@@ -23,12 +26,13 @@
 !!    call with the summed dq; every fractionating process gets its own call.
 module water_tracers_utils
 
-  use machine, only: kind_phys
+  use machine,        only: kind_phys
+  use water_isotopes, only: wiso_alpl, wiso_alpi
 
   implicit none
   private
 
-  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit, &
+  public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit, wtr_cnv_substep, &
             wtr_col_ratio
   public :: wtr_proc_none, wtr_proc_cond_liq, wtr_proc_dep_ice, wtr_proc_evap_liq, &
             wtr_proc_subl_ice, wtr_proc_freeze, wtr_proc_melt, wtr_proc_sfc_evap,   &
@@ -58,30 +62,33 @@ contains
     real(kind_phys), intent(in),    optional :: rdef     !< tracer/model ratio of water the model takes
                                                          !! beyond what the source holds (wtr_col_ratio)
 
-    real(kind_phys) :: dtrc
+    real(kind_phys) :: dtrc, f
 
     if (dq <= 0.0_kind_phys) return
 
     if (present(rdef) .and. dq > max(src_q, 0.0_kind_phys)) then
       ! The model takes more than the source holds (e.g. a cloud top where the parcel water
       ! or the saturation value is < 0), i.e. it creates the part beyond max(src_q, 0):
-      ! the source tracer gives all it holds, the created part gets the ratio rdef.
+      ! the source tracer gives all it holds (an emptied store: no fractionation), the
+      ! created part gets the ratio rdef.
       dtrc = (dq - max(src_q, 0.0_kind_phys)) * rdef
-      if (src_q > 0.0_kind_phys .and. src_trc > 0.0_kind_phys) then
-        if (present(alpha)) then
-          dtrc = dtrc + alpha * src_trc
-        else
-          dtrc = dtrc + src_trc
-        end if
-      end if
+      if (src_q > 0.0_kind_phys .and. src_trc > 0.0_kind_phys) dtrc = dtrc + src_trc
     else
       if (src_q <= 0.0_kind_phys .or. src_trc <= 0.0_kind_phys) return
-      ! Without rdef, not capped at the source: where the model takes more than a store
-      ! holds, the tracer follows at the source ratio (amplifies small tracer/model
-      ! mismatches when the store is nearly empty; callers where this happens pass rdef).
-      ! (Isotopes, alpha /= 1: to be revisited.)
-      dtrc = (dq / src_q) * src_trc
-      if (present(alpha)) dtrc = alpha * dtrc
+      ! Default (alpha absent or 1: H2O, tags), and wherever the model takes all of a store
+      ! (f = 1) or more than it holds (f > 1): the tracer follows at the source ratio, not
+      ! capped (a bulk set mirrors the model where it drives a store negative; tags are
+      ! clipped by the host; an emptied store has nothing left to fractionate against).
+      f = dq / src_q
+      dtrc = f * src_trc
+      if (present(alpha)) then
+        if (alpha /= 1.0_kind_phys .and. f < 1.0_kind_phys) then
+          ! Fractionation (isotopes): the water moved is in equilibrium with the water left
+          ! in the source, (dtrc/dq) / ((src_trc-dtrc)/(src_q-dq)) = alpha. Equal to
+          ! alpha*f*src_trc for small f, and never more than the source holds (f -> 1: all).
+          dtrc = src_trc * alpha * f / (1.0_kind_phys + (alpha - 1.0_kind_phys) * f)
+        end if
+      end if
     end if
 
     src_trc = src_trc - dtrc
@@ -190,6 +197,51 @@ contains
     end do
   end subroutine wtr_ratio_limit
 
+  !> Convective (SAMF) transport of one vapour field in a column, sub-stepped: the
+  !! scheme's own source terms s (dellae before the environment term: updraft and
+  !! downdraft fluxes, entrainment, detrainment) and the environment subsidence/uplift
+  !! by the net cloud mass flux mf, first-order upwind, in ns sub-steps of at most one
+  !! layer each (the scheme takes one explicit step of up to several layers, which is
+  !! unstable for ratios: isotope compositions then alternate level by level). Same
+  !! level ranges and kb/jmin double-counting corrections as the scheme. Used for
+  !! isotope sets: ratio = (isotope transported) / (model vapour transported).
+  pure subroutine wtr_cnv_substep(nk, ktop, kb, jmin, mf, ekb, djm, dp, grav, xdt, s, x)
+    integer,         intent(in)    :: nk, ktop, kb, jmin  !< levels, cloud top, cloud base, downdraft start (0: none)
+    real(kind_phys), intent(in)    :: mf(nk)    !< net cloud mass flux at the top of each layer, per unit xmb (> 0: environment subsides)
+    real(kind_phys), intent(in)    :: ekb, djm  !< eta(kb) and edto*etad(jmin) of the scheme's double-counting corrections
+    real(kind_phys), intent(in)    :: dp(nk)    !< layer pressure thickness (Pa)
+    real(kind_phys), intent(in)    :: grav, xdt !< gravity; cloud-base mass flux times time step
+    real(kind_phys), intent(in)    :: s(nk)     !< source tendency per unit xmb (scheme's dellae without the environment term)
+    real(kind_phys), intent(inout) :: x(nk)     !< field before (in) and after (out) the transport
+    real(kind_phys) :: flx(0:nk), t(nk), c, xi
+    integer :: ns, it, k
+
+    c = 0.0_kind_phys
+    do k = 1, ktop-1
+      c = max(c, abs(mf(k))*xdt*grav/min(dp(k), dp(k+1)))
+    end do
+    ns = max(1, ceiling(c))
+    do it = 1, ns
+      flx = 0.0_kind_phys
+      t   = s
+      do k = 1, ktop-1
+        if (mf(k) > 0.0_kind_phys) then
+          xi = x(k+1)
+        else if (mf(k) < 0.0_kind_phys) then
+          xi = x(k)
+        else
+          xi = 0.5_kind_phys*(x(k) + x(k+1))
+        end if
+        flx(k) = mf(k)*xi
+        if (k == jmin) t(k+1) = t(k+1) - djm*xi*grav/dp(k+1)
+        if (k == kb)   t(k)   = t(k)   - ekb*xi*grav/dp(k)
+      end do
+      do k = 1, ktop
+        x(k) = x(k) + (t(k) + (flx(k) - flx(k-1))*grav/dp(k))*xdt/ns
+      end do
+    end do
+  end subroutine wtr_cnv_substep
+
   !> Tracer/model ratio of a column (levels with model water > 0), for water the model
   !! creates where there is no ratio to follow (rdef of wtr_transfer). rdef here: the value
   !! when no level has water (1 for a bulk set, 0 for a tag).
@@ -204,15 +256,31 @@ contains
     end if
   end function wtr_col_ratio
 
-  !> Fractionation factor of a process for a species, at temperature temp (K).
-  !! 1 for H2O (bulk and tags) and, for now, for all species and processes.
-  !! The isotope values (HDO, H218O) are filled in Phase 4.
+  !> Fractionation factor of a process for a species, at temperature temp (K): the alpha
+  !! of wtr_transfer for water leaving the source store of that process.
+  !! Equilibrium fractionation only (isotopes step 2a), as iCESM (water_isotopes):
+  !!   vapour -> liquid (cond_liq):   alpha_l(T)    Horita & Wesolowski (1994)
+  !!   vapour -> ice    (dep_ice):    alpha_i(T)    Merlivat & Nief (1967), Majoube (1971b)
+  !!   liquid -> vapour (evap_liq):   1/alpha_l(T)
+  !!   ice -> vapour    (subl_ice):   1             (ice sublimates layer by layer)
+  !!   freezing, melting, surface evaporation, sea-ice growth, none: 1 (for now)
+  !! Exactly 1 for H2O (bulk and tags). Kinetic effects (ice supersaturation, evaporation
+  !! into unsaturated air) and the surface values (Craig-Gordon) come in later steps.
   elemental real(kind_phys) function wtr_alpha(species, process, temp)
     integer,         intent(in) :: species  !< species id (water_tracers_config: 1 H2O, 2 HDO, 3 H218O)
     integer,         intent(in) :: process  !< process id (wtr_proc_*)
     real(kind_phys), intent(in) :: temp     !< temperature (K)
 
     wtr_alpha = 1.0_kind_phys
+    if (species <= 1) return
+    select case (process)
+    case (wtr_proc_cond_liq)
+      wtr_alpha = wiso_alpl(species, temp)
+    case (wtr_proc_dep_ice)
+      wtr_alpha = wiso_alpi(species, temp)
+    case (wtr_proc_evap_liq)
+      wtr_alpha = 1.0_kind_phys / wiso_alpl(species, temp)
+    end select
   end function wtr_alpha
 
 end module water_tracers_utils

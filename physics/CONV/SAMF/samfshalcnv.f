@@ -67,7 +67,7 @@
       use funcphys , only : fpvs
       use water_tracers_utils, only : wtr_transfer, wtr_alpha,          &
      &     wtr_proc_cond_liq, wtr_proc_evap_liq, wtr_ratio_limit,
-     &     wtr_col_ratio, wtr_cnv_substep
+     &     wtr_col_ratio, wtr_cnv_substep, wtr_qmin_ratio
       use water_tracers_config, only : wtr_kind_bulk, wtr_species_h2o,
      &     wtr_h2o_twin
 
@@ -763,9 +763,10 @@ c
       endif
 !     water tracers: vapour tracers on interface levels in proportion
 !     to the model vapour qo (tracer/model ratio of the layer qo uses;
-!     where that layer's vapour is <= 0, the model creates qo - q1:
-!     it gets the column ratio wrc, also used below for water the
-!     model takes from an updraft parcel that holds <= 0)
+!     where that layer's vapour is <= wtr_qmin_ratio, its ratio is
+!     not meaningful (a near-empty level: rounding): the tracer keeps
+!     its layer value and qo - q1 gets the column ratio wrc, also used
+!     below for water the model takes from a parcel that holds <= 0)
       if (wtag) then
         do m = 1, wtr_nset
           kv = wkv(m)
@@ -773,13 +774,15 @@ c
             wrc(i,m) = merge(1._kind_phys, 0._kind_phys,
      &        wtr_kind(m) == wtr_kind_bulk)
             if (cnvflg(i)) wrc(i,m) = wtr_col_ratio(q1(i,1:kmax(i)),
-     &        ctr(i,1:kmax(i),kv), wrc(i,m))
+     &        ctr(i,1:kmax(i),kv), wrc(i,m), merge(wtr_qmin_ratio,
+     &        0._kind_phys, wtr_species(m) /= wtr_species_h2o .and.
+     &        wtr_kind(m) == wtr_kind_bulk))
           enddo
           do k = 1, km1
             do i = 1, im
               if (cnvflg(i) .and. k <= kmax(i)) then
                 kq = min(k+1, kmax(i))
-                if (q1(i,kq) > 0.) then
+                if (q1(i,kq) > wtr_qmin_ratio) then
                   ctro(i,k,kv) = qo(i,k) * ctr(i,kq,kv) / q1(i,kq)
                 else
                   ctro(i,k,kv) = ctr(i,kq,kv)
@@ -2812,7 +2815,8 @@ c
           do i = 1, im
             if (cnvflg(i)) call wtr_ratio_limit(ktcon(i),
      &         q1(i,1:ktcon(i)), qtr(i,1:ktcon(i),kv),
-     &         new_q1(i,1:ktcon(i)), new_qtr(i,1:ktcon(i),kv))
+     &         new_q1(i,1:ktcon(i)), new_qtr(i,1:ktcon(i),kv),
+     &         wtr_qmin_ratio)
           enddo
         enddo
         do m = 1, wtr_nset

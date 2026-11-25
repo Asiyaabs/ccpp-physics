@@ -4,7 +4,7 @@
   dependencies = ../../hooks/machine.F
   dependencies = ../module_mp_radar.F90
   dependencies = module_mp_thompson.F90,module_mp_thompson_make_number_concentrations.F90
-  dependencies = ../../tools/water_isotopes.F90,../../tools/water_tracers_utils.F90
+  dependencies = ../../tools/water_isotopes.F90,../../tools/water_tracers_utils.F90,../../tools/water_tracers_config.F90
 
 ########################################################################
 [ccpp-arg-table]
@@ -1110,6 +1110,13 @@
 [wtr_species]
   standard_name = species_of_water_tracer_sets
   long_name = species of each water tracer set (1 H2O, 2 HDO, 3 H218O)
+  units = index
+  dimensions = (number_of_water_tracer_sets)
+  type = integer
+  intent = in
+[wtr_kind]
+  standard_name = kind_of_water_tracer_sets
+  long_name = kind of each water tracer set (1 bulk, 2 tag)
   units = index
   dimensions = (number_of_water_tracer_sets)
   type = integer

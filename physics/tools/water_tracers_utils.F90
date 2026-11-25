@@ -32,6 +32,11 @@ module water_tracers_utils
   implicit none
   private
 
+  !> model water below which a level's tracer/model ratio is not used: column ratio of isotope
+  !! sets, SAMF interface values and the range of wtr_ratio_limit (near-empty or floor levels)
+  real(kind_phys), parameter :: wtr_qmin_ratio = 1.0e-7_kind_phys
+
+  public :: wtr_qmin_ratio
   public :: wtr_transfer, wtr_alpha, wtr_exchange, wtr_net, wtr_sediment, wtr_ratio_limit, wtr_cnv_substep, &
             wtr_col_ratio
   public :: wtr_proc_none, wtr_proc_cond_liq, wtr_proc_dep_ice, wtr_proc_evap_liq, &
@@ -173,20 +178,23 @@ contains
   end subroutine wtr_sediment
 
   !> Keep the tracer/model ratio of a column after a scheme within the range it had before
-  !! the scheme (levels with model water > 0). For explicit transports that can move more
+  !! the scheme (levels with model water > qmin; default 0). For explicit transports that can move more
   !! than a layer's mass per step: exact for a bulk set (ratio 1), bounded for tags.
-  pure subroutine wtr_ratio_limit(n, q0, t0, q1, t1)
+  pure subroutine wtr_ratio_limit(n, q0, t0, q1, t1, qmin)
     integer,         intent(in)    :: n
     real(kind_phys), intent(in)    :: q0(n), t0(n)  !< model water and tracer before the scheme
     real(kind_phys), intent(in)    :: q1(n)         !< model water after the scheme
     real(kind_phys), intent(inout) :: t1(n)         !< tracer after the scheme
-    real(kind_phys) :: rmin, rmax
+    real(kind_phys), intent(in), optional :: qmin   !< range from levels with q0 > qmin (default 0)
+    real(kind_phys) :: rmin, rmax, q0min
     integer :: k
 
+    q0min = 0.0_kind_phys
+    if (present(qmin)) q0min = qmin
     rmin =  huge(1.0_kind_phys)
     rmax = -huge(1.0_kind_phys)
     do k = 1, n
-      if (q0(k) > 0.0_kind_phys) then
+      if (q0(k) > q0min) then
         rmin = min(rmin, t0(k)/q0(k))
         rmax = max(rmax, t0(k)/q0(k))
       end if
@@ -242,15 +250,22 @@ contains
     end do
   end subroutine wtr_cnv_substep
 
-  !> Tracer/model ratio of a column (levels with model water > 0), for water the model
-  !! creates where there is no ratio to follow (rdef of wtr_transfer). rdef here: the value
-  !! when no level has water (1 for a bulk set, 0 for a tag).
-  pure real(kind_phys) function wtr_col_ratio(q, t, rdef)
+  !> Tracer/model ratio of a column (levels with model water > qmin, default 0), for water
+  !! the model creates where there is no ratio to follow (rdef of wtr_transfer). rdef here:
+  !! the value when no level has water (1 for a bulk set, 0 for a tag). Isotope sets pass
+  !! qmin = wtr_qmin_ratio: in a column dried to floor values (1e-10, 1e-7) a sum over those
+  !! levels divides by almost nothing and the ratio is meaningless.
+  pure real(kind_phys) function wtr_col_ratio(q, t, rdef, qmin)
     real(kind_phys), intent(in) :: q(:), t(:)  !< model water and tracer of the column
     real(kind_phys), intent(in) :: rdef
+    real(kind_phys), intent(in), optional :: qmin
 
-    if (any(q > 0.0_kind_phys)) then
-      wtr_col_ratio = sum(t, mask = q > 0.0_kind_phys) / sum(q, mask = q > 0.0_kind_phys)
+    real(kind_phys) :: q0
+
+    q0 = 0.0_kind_phys
+    if (present(qmin)) q0 = qmin
+    if (any(q > q0)) then
+      wtr_col_ratio = sum(t, mask = q > q0) / sum(q, mask = q > q0)
     else
       wtr_col_ratio = rdef
     end if

@@ -1045,9 +1045,10 @@ module module_mp_thompson
                               nrten3, ncten3, qcten3,                 &
                               pfils, pflls,                           &
                               fs_fac_rain, fs_fac_snow,               &
-                              wtr_nset, wtr_species, wtr_q, wtr_ppt)
+                              wtr_nset, wtr_species, wtr_kind, wtr_q, wtr_ppt)
 
-         use water_tracers_utils, only: wtr_col_ratio
+         use water_tracers_utils, only: wtr_col_ratio, wtr_qmin_ratio
+         use water_tracers_config, only: wtr_species_h2o, wtr_kind_bulk
          implicit none
 
 !..Subroutine arguments
@@ -1121,7 +1122,7 @@ module module_mp_thompson
 !.. qv,qc,qi,qr,qs,qg of each set; surface rain and snow+ice+graupel of
 !.. each set summed over the inner steps (mm, like RAINNCV)
          integer, intent(in) :: wtr_nset
-         integer, dimension(:), intent(in) :: wtr_species
+         integer, dimension(:), intent(in) :: wtr_species, wtr_kind
          real(wp), dimension(ims:ime, kms:kme, jms:jme, 6, wtr_nset),    &
                                             intent(inout) :: wtr_q
          real(wp), dimension(ims:ime, jms:jme, 2, wtr_nset),             &
@@ -1658,11 +1659,21 @@ module module_mp_thompson
                      else
                         qv(i,k,j) = 1.E-7
                      endif
-!..water tracers: the vapour created here gets the column vapour ratio
+!..water tracers: the vapour created here gets the column vapour ratio.
+!..Isotope bulk sets (not clipped by the host) drop their negative vapour
+!..with the model's: set to qv x column ratio over levels with water
+!..(wtr_qmin_ratio). H2O sets and all tags: increment, as before (isotope
+!..tags stay on the path of their H2O twin tag).
                      do m = 1, wtr_nset
-                        wrat(m) = wtr_col_ratio(qv1d, wq1d(:,1,m), 1.0_wp)
-                        wtr_q(i,k,j,1,m) = wtr_q(i,k,j,1,m)                &
-                                         + (qv(i,k,j) - qv1d(k))*wrat(m)
+                        if (wtr_species(m) /= wtr_species_h2o .and.       &
+                            wtr_kind(m) == wtr_kind_bulk) then
+                           wrat(m) = wtr_col_ratio(qv1d, wq1d(:,1,m), 1.0_wp, wtr_qmin_ratio)
+                           wtr_q(i,k,j,1,m) = qv(i,k,j)*wrat(m)
+                        else
+                           wrat(m) = wtr_col_ratio(qv1d, wq1d(:,1,m), 1.0_wp)
+                           wtr_q(i,k,j,1,m) = wtr_q(i,k,j,1,m)             &
+                                            + (qv(i,k,j) - qv1d(k))*wrat(m)
+                        endif
                      enddo
                   endif
                enddo

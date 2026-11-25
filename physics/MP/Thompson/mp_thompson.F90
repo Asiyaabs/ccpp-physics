@@ -388,7 +388,7 @@ module mp_thompson
                               dqi, dqs, dqg, dni, dnr, dnc, dnwfa, &
                               dnifa, dtgrs, ten_u, ten_v,          &
                               tagging, wtr_nset, wtr_nphase,       &
-                              wtr_idx, wtr_species, gq0,           &
+                              wtr_idx, wtr_species, wtr_kind, gq0, &
                               wtr_rainmp, wtr_snowmp,              &
                               errmsg, errflg)
 
@@ -473,7 +473,7 @@ module mp_thompson
          ! mixing ratios, like the model water; tendencies go to ten_q
          logical,                   intent(in   ) :: tagging
          integer,                   intent(in   ) :: wtr_nset, wtr_nphase
-         integer,                   intent(in   ) :: wtr_idx(:,:), wtr_species(:)
+         integer,                   intent(in   ) :: wtr_idx(:,:), wtr_species(:), wtr_kind(:)
          real(kind_phys),           intent(in   ) :: gq0(:,:,:)
          real(kind_phys),           intent(inout) :: wtr_rainmp(:,:), wtr_snowmp(:,:)
          real(kind_phys) :: wq(ncol,nlev,6,wtr_nset), wppt(ncol,2,wtr_nset)
@@ -872,7 +872,7 @@ module mp_thompson
                               qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
                               fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
                               wtr_nset=wtr_nset, wtr_species=wtr_species,    &
-                              wtr_q=wq, wtr_ppt=wppt)
+                              wtr_kind=wtr_kind, wtr_q=wq, wtr_ppt=wppt)
          else if (merra2_aerosol_aware) then
              call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                                nc=new_nc, nwfa=new_nwfa, nifa=new_nifa,                                   &
@@ -917,7 +917,7 @@ module mp_thompson
                                qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
                                fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
                               wtr_nset=wtr_nset, wtr_species=wtr_species,    &
-                              wtr_q=wq, wtr_ppt=wppt)
+                              wtr_kind=wtr_kind, wtr_q=wq, wtr_ppt=wppt)
          else
             call mp_gt_driver(qv=qv, qc=new_qc, qr=new_qr, qi=new_qi, qs=new_qs, qg=new_qg, ni=new_ni, nr=new_nr,        &
                               tt=new_tgrs, p=prsl, w=w, dz=dz, dt_in=dtstep, dt_inner=dt_inner,  &
@@ -960,7 +960,7 @@ module mp_thompson
                               qcten3=qcten3, pfils=pfils, pflls=pflls,                       &
                               fs_fac_rain=fs_fac_rain, fs_fac_snow=fs_fac_snow,       &
                               wtr_nset=wtr_nset, wtr_species=wtr_species,    &
-                              wtr_q=wq, wtr_ppt=wppt)
+                              wtr_kind=wtr_kind, wtr_q=wq, wtr_ppt=wppt)
          end if
          if (errflg/=0) return
 

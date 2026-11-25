@@ -182,7 +182,7 @@
       real(kind=kind_phys), intent(in) :: wtr_tag_frac
       integer :: iwv, iwl
       real(kind=kind_phys) :: wflx, wqt, wqm0, wqm1, wtrc, wdql, wdqr
-      real(kind=kind_phys) :: wqv(im,km), wql0(im,km)
+      real(kind=kind_phys) :: wqv(im,km), wql0(im,km), wqs(im,km)
 !  flag for TTE-EDMF scheme
       logical, intent(in)  :: tte_edmf
 !     
@@ -2676,6 +2676,9 @@ c
 !> - Call tridin() to solve tridiagonal problem for heat and moisture
 c
       call tridin(im,km,ntrac1,al,ad,au,f1,f2,au,f1,f2)
+!     water tracers: model vapour after the solver, before its
+!     negative-vapour fix below (the tracers get the same fix)
+      if (tagging) wqs(:,:) = f2(:,1:km)
 !
 ! Negative moisture is set to zero after borrowing it from
 !   positive values within the mass-flux transport layers
@@ -2868,13 +2871,22 @@ c
         enddo
       endif
 !
-!     water tracers: net vapour given to cloud water (wdql) and to rain
-!     (wdqr) by the two borrowings above, moved from the vapour tracer
-!     to the cloud water and rain tracers of each set (no fractionation)
+!     water tracers: first the model's negative-vapour fix above, as
+!     its factor per level (fixed / solver vapour, 0 to 1), so that the
+!     tracer and model vapour are at the same stage; then the net
+!     vapour given to cloud water (wdql) and to rain (wdqr) by the two
+!     borrowings above, moved from the vapour tracer to the cloud water
+!     and rain tracers of each set (no fractionation)
       if (tagging) then
         do n = 1, wtr_nset
           iwv = ntrac1 - wtr_nset*wtr_nphase + (n-1)*wtr_nphase + 1
           iwl = iwv + 1
+          do k = 1, km
+            do i = 1, im
+              if (wqs(i,k) /= 0.) f2(i,k+(iwv-1)*km) =
+     &          f2(i,k+(iwv-1)*km) * (wqv(i,k) / wqs(i,k))
+            enddo
+          enddo
           do k = 1, kps
             do i = 1, im
               wdql = f2(i,k+(ntcw-1)*km) - wql0(i,k)
